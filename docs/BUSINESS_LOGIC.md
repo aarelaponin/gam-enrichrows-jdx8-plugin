@@ -6,26 +6,54 @@ This document describes the business logic implemented in the GL Transaction Pro
 ## Processing Pipeline Architecture
 
 The pipeline processes transactions through the following sequential steps:
-1. Data Loading (from source systems)
-2. Currency Validation
-3. Counterparty Determination
-4. F14 Rule Mapping (Transaction Classification)
-5. Customer Identification
-6. FX Conversion
-7. Data Persistence (to enrichment store)
+1. **Data Loading** - Load transactions and mark statements as "processing"
+2. **Currency Validation** - Validate currency codes against master data
+3. **FX Conversion** - Convert foreign currencies to EUR base currency
+4. **Customer Identification** - Identify customer (bank transactions only)
+5. **Counterparty Determination** - Identify the other party in transactions
+6. **F14 Rule Mapping** - Classify transactions using business rules
+7. **Data Persistence** - Save enriched data and update all statuses
 
 Each step enriches the transaction context with additional data while validating business rules and creating exceptions for manual review when necessary.
+
+## State Management Model
+
+The system implements comprehensive state tracking at three levels:
+
+### Statement Level States
+- **new**: Unprocessed statement awaiting enrichment
+- **processing**: Currently being processed by the pipeline
+- **processed**: All transactions successfully enriched
+- **processed_with_errors**: Some transactions failed enrichment
+
+### Transaction Level States
+- **new**: Unprocessed transaction
+- **enriched**: Successfully processed and stored in enrichment table
+- **failed**: Could not be enriched due to errors
+
+### Enrichment Record Status
+- **enriched**: Ready for GL posting
+- **manual_review**: Requires human intervention
+- **failed**: Critical errors prevent processing
 
 ## Step-by-Step Business Logic
 
 ### Step 1: Data Loading
-**Purpose**: Load unprocessed transactions from source systems (bank and securities)
+**Class**: `TransactionDataLoader`  
+**Purpose**: Load unprocessed transactions from source systems with state management
 
 **Business Logic**:
 - Identifies all statements with status = "new"
+- **Marks each statement as "processing"** when loading begins
+- Records `processing_started` timestamp
 - Loads associated transactions (bank or securities) with status = "new"
 - Preserves source system relationships (statement → transactions)
+- Groups transactions by statement for batch processing
 - Sorts transactions by date for chronological processing
+
+**State Transitions**:
+- Statement: `new` → `processing`
+- Transactions: remain `new` (will be updated after enrichment)
 
 ---
 
@@ -58,43 +86,73 @@ Each step enriches the transaction context with additional data while validating
 
 ---
 
-### Step 3: Counterparty Determination
-**File**: `CounterpartyDeterminationStep.java`  
-**Purpose**: Identify the other party involved in each transaction
+### Step 3: FX Conversion (Moved Earlier in Pipeline)
+**File**: `FXConversionStep.java`  
+**Purpose**: Convert foreign currency amounts to EUR base currency early in the pipeline
 
-#### Business Rules by Transaction Type
+#### Why FX Conversion Comes Early
+- Ensures all downstream steps work with consistent EUR amounts
+- Allows priority calculations to use actual EUR values
+- Simplifies amount-based business rules in later steps
 
-##### Bank Transactions
-1. **Primary Logic**: Use the other side's BIC code
-   - Look up counterparty by `other_side_bic` field
-   - Match against counterparty master table
-   - Verify counterparty status = "active"
-
-2. **Fallback Logic**: 
-   - If no counterparty found, check if bank exists in bank master
-   - Create exception for missing counterparty mapping
-   - Set counterparty to "UNKNOWN" to allow continued processing
-
-##### Securities Transactions
-1. **Primary Logic**: Use statement bank as counterparty
-   - Statement bank acts as custodian or broker
-   - Determine type based on transaction:
-     - Buy/Sell/Trade → Broker
-     - Custody/Dividend/Corporate Action → Custodian
-
-2. **Type Classification**:
-   - BANK: Traditional banking counterparty
-   - BROKER: Securities trading counterparty
-   - CUSTODIAN: Securities custody counterparty
-
-#### Data Enrichment
-- Counterparty ID, BIC, name, type
-- Counterparty short code for GL construction
-- Relationship classification
+#### Conversion Logic
+(See detailed FX conversion logic in Step 6 section below)
 
 ---
 
-### Step 4: F14 Rule Mapping
+### Step 4: Customer Identification
+**File**: `CustomerIdentificationStep.java`  
+**Purpose**: Identify the customer associated with bank transactions
+
+#### Important Note
+- **Only executes for bank transactions** (`SOURCE_TYPE_BANK`)
+- **Skips securities transactions** as they represent bank portfolio operations
+- Securities transactions don't have individual customers
+
+#### Identification Methods
+(See detailed customer identification logic in Step 5 section below)
+
+---
+
+### Step 5: Counterparty Determination
+**File**: `CounterpartyDeterminationStep.java`  
+**Purpose**: Identify the other party involved in each transaction
+
+#### Unified Logic for Both Transaction Types
+
+**Current Implementation**: Both bank and securities transactions use the statement's bank as the primary counterparty
+- Rationale: The statement bank is always involved as a party in the transaction
+- This ensures consistent counterparty identification
+
+#### Processing Logic
+
+1. **Primary Counterparty**: Always set to statement's bank
+   ```java
+   counterpartyId = statementBank (e.g., "BANK001")
+   counterpartyBic = bank's BIC code
+   counterpartyName = bank's full name
+   ```
+
+2. **Additional Data Capture**:
+   - For bank transactions with `other_side_bic`:
+     - Store in additional data for reference
+     - Could be used for future reconciliation
+   - Does not create exceptions for missing BIC lookups
+
+3. **Type Classification**:
+   - BANK: Traditional banking counterparty (default)
+   - BROKER: Securities trading counterparty (based on transaction type)
+   - CUSTODIAN: Securities custody counterparty (based on transaction type)
+
+#### Data Enrichment
+- Counterparty ID (always the statement bank)
+- Counterparty BIC and name
+- Counterparty type classification
+- Other side BIC stored as additional data (when available)
+
+---
+
+### Step 6: F14 Rule Mapping
 **File**: `F14RuleMappingStep.java`  
 **Purpose**: Map external transaction codes to standardized internal types for consistent GL posting
 
@@ -149,11 +207,13 @@ Rule 3 (Priority 100):
 
 ---
 
-### Step 5: Customer Identification
-**File**: `CustomerIdentificationStep.java`  
-**Purpose**: Identify the customer associated with each transaction using multiple methods
+### Detailed Step Logic
 
-#### Identification Methods (in order of preference)
+#### Customer Identification (Step 4 Detail)
+**File**: `CustomerIdentificationStep.java`  
+**Purpose**: Identify the customer associated with bank transactions using multiple methods
+
+##### Identification Methods (in order of preference)
 
 1. **Direct Customer ID** (100% confidence)
    - Check if `customer_id` field contains valid customer ID
@@ -198,11 +258,11 @@ Rule 3 (Priority 100):
 
 ---
 
-### Step 6: FX Conversion
+#### FX Conversion (Step 3 Detail)
 **File**: `FXConversionStep.java`  
 **Purpose**: Convert foreign currency amounts to EUR base currency
 
-#### Conversion Logic
+##### Conversion Logic
 
 1. **EUR Transactions**:
    - No conversion needed
@@ -256,31 +316,60 @@ Rule 3 (Priority 100):
 
 ---
 
-### Step 7: Data Persistence
-**Purpose**: Save enriched transaction data for GL posting
+### Step 7: Data Persistence with State Management
+**Class**: `EnrichmentDataPersister`  
+**Purpose**: Save enriched transaction data and manage all state transitions
 
-#### Persistence Logic
-1. **Enrichment Record Creation**:
-   - Generate unique enrichment ID
+#### Batch Persistence Logic
+
+1. **Transaction Grouping**:
+   - Groups all transactions by statement ID
+   - Processes each statement's transactions together
+   - Tracks success/failure counts per statement
+
+2. **Enrichment Record Creation**:
+   - Generate unique enrichment ID (format: `TRX-XXXXXX`)
    - Store all original transaction data
-   - Add all enrichment data from steps
+   - Add all enrichment data from all steps
    - Calculate processing metadata
    - Initialize `pairing_status` field to "pending"
 
-2. **Status Determination**:
+3. **State Management Flow**:
+   ```
+   For each successfully enriched transaction:
+   1. Save to trx_enrichment table
+   2. Update source transaction status: new → enriched
+   3. Record enrichment_date timestamp
+   
+   After all transactions in statement:
+   1. Calculate success/failure counts
+   2. Update statement status:
+      - All successful: processing → processed
+      - Some failures: processing → processed_with_errors
+   3. Record processing_completed timestamp
+   4. Store transaction counts in statement record
+   ```
+
+4. **Status Determination**:
    - **ENRICHED**: All steps successful, ready for GL posting
-   - **MANUAL_REVIEW**: Exceptions or low confidence require review
+   - **MANUAL_REVIEW**: Triggered by:
+     - Unknown customer or counterparty
+     - Unmatched F14 classification
+     - Customer confidence < 80%
    - **FAILED**: Critical errors prevent processing
 
-3. **Pairing Status**:
-   - **pending**: Initial status for all new enriched transactions
-   - Indicates transaction is awaiting pairing process
-   - Will be updated by downstream pairing workflow
+5. **Comprehensive Audit Trail**:
+   - Transaction-level audit entries
+   - Statement-level completion audit
+   - All timestamps and status changes recorded
+   - Links preserved between all related records
 
-4. **Audit Trail**:
-   - Record all processing steps completed
-   - Store timestamps for each enrichment
-   - Link to original source transactions
+#### State Transition Summary
+```
+Statement:  new → processing → processed/processed_with_errors
+Transaction: new → enriched
+Enrichment: (created with status based on validation results)
+```
 
 ---
 
@@ -349,21 +438,23 @@ Rule 3 (Priority 100):
 ## Business Process Flow
 
 ```
-1. Load Transactions
+1. Load Transactions & Mark Statements as "processing"
    ↓
 2. Validate Currency → Exception if invalid
    ↓
-3. Determine Counterparty → Set UNKNOWN if not found
+3. Convert to EUR → Exception if no FX rate
    ↓
-4. Apply F14 Rules → Set UNMATCHED if no rule
+4. Identify Customer (Bank only) → Set UNKNOWN if not found
    ↓
-5. Identify Customer → Set UNKNOWN if not found
+5. Determine Counterparty → Use statement bank
    ↓
-6. Convert to EUR → Exception if no FX rate
+6. Apply F14 Rules → Set UNMATCHED if no rule
    ↓
-7. Persist Enrichment → Save all data
+7. Persist Enrichment → Save all data with state management
    ↓
-8. Update Status → Mark source as processed
+8. Update All Statuses:
+   - Transactions: new → enriched
+   - Statements: processing → processed/processed_with_errors
 ```
 
 ---
