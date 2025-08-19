@@ -151,7 +151,7 @@ The plugin includes:
 
 ## License
 
-[Specify your license here]
+MIT
 
 ## Contributing
 
