@@ -1,0 +1,516 @@
+{
+    "className": "org.joget.apps.form.model.Form",
+    "properties": {
+        "id": "cpTxnMappingForm",
+        "name": "02.14 - Matching Rules",
+        "tableName": "cp_txn_mapping",
+        "description": "Centralized rule engine for transaction identification and classification",
+        "loadBinder": {
+            "className": "org.joget.apps.form.lib.WorkflowFormBinder",
+            "properties": {}
+        },
+        "storeBinder": {
+            "className": "org.joget.apps.form.lib.WorkflowFormBinder",
+            "properties": {}
+        },
+        "permission": {
+            "className": "",
+            "properties": {}
+        },
+        "postProcessor": {
+            "className": "",
+            "properties": {}
+        },
+        "postProcessorRunOn": "create",
+        "noPermissionMessage": ""
+    },
+    "elements": [
+        {
+            "className": "org.joget.apps.form.model.Section",
+            "properties": {
+                "id": "ruleIdentification",
+                "label": "Rule Identification"
+            },
+            "elements": [
+                {
+                    "className": "org.joget.apps.form.model.Column",
+                    "properties": {
+                        "width": "50%"
+                    },
+                    "elements": [
+                        {
+                            "className": "org.joget.apps.form.lib.IdGeneratorField",
+                            "properties": {
+                                "format": "TXMP-??????",
+                                "envVariable": "counter",
+                                "isDistributedGeneration": "",
+                                "label": "Mapping ID",
+                                "id": "mapping_id",
+                                "hidden": "",
+                                "workflowVariable": ""
+                            }
+                        },
+                        {
+                            "className": "org.joget.apps.form.lib.TextField",
+                            "properties": {
+                                "id": "mappingName",
+                                "label": "Mapping Name",
+                                "value": "",
+                                "readonly": "false",
+                                "readonlyLabel": "false",
+                                "workflowVariable": "",
+                                "validator": {
+                                    "className": "org.joget.apps.form.lib.DefaultValidator",
+                                    "properties": {
+                                        "mandatory": "true",
+                                        "type": "",
+                                        "message": "Please provide a descriptive rule name"
+                                    }
+                                },
+                                "placeholder": "e.g., LHV Securities Buy Orders",
+                                "size": "",
+                                "maxlength": "100",
+                                "encryption": "false",
+                                "storeNumeric": "false"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "className": "org.joget.apps.form.model.Column",
+                    "properties": {
+                        "width": "50%"
+                    },
+                    "elements": [
+                        {
+                            "className": "org.joget.apps.form.lib.SelectBox",
+                            "properties": {
+                                "id": "counterpartyId",
+                                "label": "Counterparty",
+                                "value": "",
+                                "readonly": "",
+                                "readonlyLabel": "",
+                                "workflowVariable": "",
+                                "validator": {
+                                    "className": "org.joget.apps.form.lib.DefaultValidator",
+                                    "properties": {
+                                        "mandatory": "true",
+                                        "type": "",
+                                        "message": "Please select a counterparty or SYSTEM"
+                                    }
+                                },
+                                "multiple": "",
+                                "size": "",
+                                "options": [],
+                                "optionsBinder": {
+                                    "className": "org.joget.apps.form.lib.FormOptionsBinder",
+                                    "properties": {
+                                        "formDefId": "counterpartyMaster",
+                                        "idColumn": "counterpartyId",
+                                        "labelColumn": "shortCode",
+                                        "groupingColumn": "",
+                                        "extraCondition": "",
+                                        "addEmptyOption": "true",
+                                        "emptyLabel": "",
+                                        "useAjax": "",
+                                        "cacheInterval": ""
+                                    }
+                                },
+                                "controlField": ""
+                            }
+                        },
+                        {
+                            "className": "org.joget.apps.form.lib.SelectBox",
+                            "properties": {
+                                "id": "sourceType",
+                                "label": "Source Type",
+                                "value": "",
+                                "readonly": "",
+                                "readonlyLabel": "",
+                                "workflowVariable": "",
+                                "validator": {
+                                    "className": "org.joget.apps.form.lib.DefaultValidator",
+                                    "properties": {
+                                        "mandatory": "true",
+                                        "type": "",
+                                        "message": "Please select the source type"
+                                    }
+                                },
+                                "multiple": "",
+                                "size": "",
+                                "options": [
+                                    {
+                                        "value": "",
+                                        "label": "Select Source Type",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "value": "bank",
+                                        "label": "Bank Transactions",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "value": "secu",
+                                        "label": "Securities Transactions",
+                                        "grouping": ""
+                                    }
+                                ],
+                                "optionsBinder": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "controlField": ""
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "className": "org.joget.apps.form.model.Section",
+            "properties": {
+                "id": "matchingRules",
+                "label": "Matching Rules"
+            },
+            "elements": [
+                {
+                    "className": "org.joget.apps.form.model.Column",
+                    "properties": {
+                        "width": "50%"
+                    },
+                    "elements": [
+                        {
+                            "className": "org.joget.apps.form.lib.SelectBox",
+                            "properties": {
+                                "id": "matchingField",
+                                "label": "Matching Field",
+                                "options": [
+                                    {
+                                        "value": "",
+                                        "label": "Select Field",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "value": "type",
+                                        "label": "Type",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "value": "d_c",
+                                        "label": "D/C (Debit/Credit)",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "value": "description",
+                                        "label": "Description",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "value": "reference",
+                                        "label": "Reference",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "value": "other_side_name",
+                                        "label": "Other Side Name",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "value": "combined",
+                                        "label": "Combined Fields",
+                                        "grouping": ""
+                                    }
+                                ],
+                                "optionsBinder": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "multiple": "",
+                                "value": "",
+                                "validator": {
+                                    "className": "org.joget.apps.form.lib.DefaultValidator",
+                                    "properties": {
+                                        "mandatory": "true",
+                                        "type": "",
+                                        "message": ""
+                                    }
+                                },
+                                "readonly": "",
+                                "readonlyLabel": "",
+                                "controlField": "",
+                                "controlValue": "",
+                                "size": "",
+                                "workflowVariable": ""
+                            }
+                        },
+                        {
+                            "className": "org.joget.apps.form.lib.SelectBox",
+                            "properties": {
+                                "id": "matchOperator",
+                                "label": "Match Operator",
+                                "value": "",
+                                "readonly": "false",
+                                "readonlyLabel": "false",
+                                "workflowVariable": "",
+                                "validator": {
+                                    "className": "org.joget.apps.form.lib.DefaultValidator",
+                                    "properties": {
+                                        "mandatory": "true",
+                                        "type": "",
+                                        "message": "Please select a match operator"
+                                    }
+                                },
+                                "multiple": "false",
+                                "size": "",
+                                "options": [
+                                    {
+                                        "value": "equals",
+                                        "label": "Equals (Exact Match)"
+                                    },
+                                    {
+                                        "value": "contains",
+                                        "label": "Contains (Substring)"
+                                    },
+                                    {
+                                        "value": "startsWith",
+                                        "label": "Starts With"
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+                {
+                    "className": "org.joget.apps.form.model.Column",
+                    "properties": {
+                        "width": "50%"
+                    },
+                    "elements": [
+                        {
+                            "className": "org.joget.apps.form.lib.TextField",
+                            "properties": {
+                                "id": "matchValue",
+                                "label": "Match Value",
+                                "value": "",
+                                "readonly": "false",
+                                "readonlyLabel": "false",
+                                "workflowVariable": "",
+                                "validator": {
+                                    "className": "org.joget.apps.form.lib.DefaultValidator",
+                                    "properties": {
+                                        "mandatory": "true",
+                                        "type": "",
+                                        "message": "Please provide the value to match"
+                                    }
+                                },
+                                "placeholder": "Value to match",
+                                "size": "",
+                                "maxlength": "500",
+                                "encryption": "false",
+                                "storeNumeric": "false"
+                            }
+                        },
+                        {
+                            "className": "org.joget.apps.form.lib.CheckBox",
+                            "properties": {
+                                "id": "caseSensitive",
+                                "label": "Case Sensitivity",
+                                "value": "",
+                                "readonly": "false",
+                                "readonlyLabel": "false",
+                                "workflowVariable": "",
+                                "validator": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "options": [
+                                    {
+                                        "value": "true",
+                                        "label": "Case Sensitive Matching"
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "className": "org.joget.apps.form.model.Section",
+            "properties": {
+                "id": "outputControl",
+                "label": "Output & Control"
+            },
+            "elements": [
+                {
+                    "className": "org.joget.apps.form.model.Column",
+                    "properties": {
+                        "width": "50%"
+                    },
+                    "elements": [
+                        {
+                            "className": "org.joget.apps.form.lib.SelectBox",
+                            "properties": {
+                                "readonly": "",
+                                "multiple": "",
+                                "label": "Internal Type",
+                                "readonlyLabel": "",
+                                "id": "internalType",
+                                "options": [],
+                                "optionsBinder": {
+                                    "className": "org.joget.apps.form.lib.FormOptionsBinder",
+                                    "properties": {
+                                        "formDefId": "transactionTypeMapForm",
+                                        "idColumn": "internalType",
+                                        "labelColumn": "internalType",
+                                        "groupingColumn": "",
+                                        "extraCondition": "",
+                                        "addEmptyOption": "true",
+                                        "emptyLabel": "",
+                                        "useAjax": "",
+                                        "cacheInterval": ""
+                                    }
+                                },
+                                "value": "",
+                                "validator": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "controlField": "",
+                                "size": "",
+                                "workflowVariable": ""
+                            }
+                        },
+                        {
+                            "className": "org.joget.apps.form.lib.SelectBox",
+                            "properties": {
+                                "id": "priority",
+                                "label": "Priority",
+                                "options": [
+                                    {
+                                        "value": "",
+                                        "label": "Select Priority",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "value": "1",
+                                        "label": "1 - Highest",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "value": "2",
+                                        "label": "2 - High",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "value": "3",
+                                        "label": "3 - Medium",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "value": "4",
+                                        "label": "4 - Low",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "value": "5",
+                                        "label": "5 - Lowest",
+                                        "grouping": ""
+                                    }
+                                ],
+                                "optionsBinder": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "multiple": "",
+                                "value": "3",
+                                "validator": {
+                                    "className": "org.joget.apps.form.lib.DefaultValidator",
+                                    "properties": {
+                                        "mandatory": "true",
+                                        "type": "",
+                                        "message": ""
+                                    }
+                                },
+                                "readonly": "",
+                                "readonlyLabel": "",
+                                "controlField": "",
+                                "controlValue": "",
+                                "size": "",
+                                "workflowVariable": ""
+                            }
+                        }
+                    ]
+                },
+                {
+                    "className": "org.joget.apps.form.model.Column",
+                    "properties": {
+                        "width": "50%"
+                    },
+                    "elements": [
+                        {
+                            "className": "org.joget.apps.form.lib.SelectBox",
+                            "properties": {
+                                "id": "status",
+                                "label": "Status",
+                                "value": "Active",
+                                "readonly": "false",
+                                "readonlyLabel": "false",
+                                "workflowVariable": "",
+                                "validator": {
+                                    "className": "org.joget.apps.form.lib.DefaultValidator",
+                                    "properties": {
+                                        "mandatory": "true",
+                                        "type": "",
+                                        "message": ""
+                                    }
+                                },
+                                "multiple": "false",
+                                "size": "",
+                                "options": [
+                                    {
+                                        "value": "Active",
+                                        "label": "Active"
+                                    },
+                                    {
+                                        "value": "Inactive",
+                                        "label": "Inactive"
+                                    },
+                                    {
+                                        "value": "Testing",
+                                        "label": "Testing (Log Only)"
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "className": "org.joget.apps.form.lib.DatePicker",
+                            "properties": {
+                                "readonly": "",
+                                "allowManual": "",
+                                "yearRange": "c-10:c+10",
+                                "dataFormat": "yyyy-MM-dd",
+                                "label": "Effective Date",
+                                "datePickerType": "",
+                                "currentDateAs": "",
+                                "disableWeekends": "",
+                                "readonlyLabel": "",
+                                "id": "effectiveDate",
+                                "value": "",
+                                "validator": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "startDateFieldId": "",
+                                "endDateFieldId": "",
+                                "placeholder": "",
+                                "format": "",
+                                "workflowVariable": ""
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,1081 @@
+{
+    "elements": [
+        {
+            "elements": [
+                {
+                    "elements": [
+                        {
+                            "className": "org.joget.apps.form.lib.IdGeneratorField",
+                            "properties": {
+                                "hidden": "",
+                                "format": "ID-??????",
+                                "workflowVariable": "",
+                                "envVariable": "counter",
+                                "isDistributedGeneration": "",
+                                "label": "Internal Reference",
+                                "id": "reference"
+                            }
+                        },
+                        {
+                            "className": "org.joget.apps.form.lib.SelectBox",
+                            "properties": {
+                                "controlField": "",
+                                "readonly": "",
+                                "size": "",
+                                "optionsBinder": {
+                                    "className": "org.joget.plugin.enterprise.DatabaseWizardOptionsBinder",
+                                    "properties": {
+                                        "jdbcDatasource": "default",
+                                        "tableName": "app_fd_bank",
+                                        "joins": [],
+                                        "valueColumn": "c_swift_code_bic",
+                                        "labelColumn": "c_name",
+                                        "groupingColumn": "",
+                                        "useAjax": "",
+                                        "addEmpty": "true",
+                                        "emptyLabel": "",
+                                        "filters": [],
+                                        "extraCondition": ""
+                                    }
+                                },
+                                "multiple": "",
+                                "options": [],
+                                "validator": {
+                                    "className": "org.joget.apps.form.lib.DefaultValidator",
+                                    "properties": {
+                                        "mandatory": "true",
+                                        "type": "",
+                                        "message": ""
+                                    }
+                                },
+                                "workflowVariable": "bank",
+                                "label": "Bank",
+                                "id": "bank",
+                                "value": "",
+                                "readonlyLabel": ""
+                            }
+                        },
+                        {
+                            "className": "org.joget.apps.form.lib.SelectBox",
+                            "properties": {
+                                "controlField": "",
+                                "readonly": "",
+                                "size": "",
+                                "optionsBinder": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "multiple": "",
+                                "options": [
+                                    {
+                                        "value": "bank",
+                                        "label": "Bank Account",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "value": "secu",
+                                        "label": "Securities",
+                                        "grouping": ""
+                                    }
+                                ],
+                                "validator": {
+                                    "className": "org.joget.apps.form.lib.DefaultValidator",
+                                    "properties": {
+                                        "mandatory": "true",
+                                        "type": "",
+                                        "message": ""
+                                    }
+                                },
+                                "workflowVariable": "",
+                                "label": "Account Type",
+                                "id": "account_type",
+                                "value": "",
+                                "readonlyLabel": ""
+                            }
+                        },
+                        {
+                            "className": "org.joget.apps.form.lib.DatePicker",
+                            "properties": {
+                                "yearRange": "c-10:c+10",
+                                "dataFormat": "yyyy-MM-dd",
+                                "startDateFieldId": "",
+                                "validator": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "format": "",
+                                "label": "From date",
+                                "datePickerType": "",
+                                "currentDateAs": "",
+                                "endDateFieldId": "",
+                                "readonly": "",
+                                "allowManual": "",
+                                "workflowVariable": "",
+                                "id": "from_date",
+                                "placeholder": "",
+                                "disableWeekends": "",
+                                "value": "",
+                                "readonlyLabel": ""
+                            }
+                        },
+                        {
+                            "className": "org.joget.apps.form.lib.DatePicker",
+                            "properties": {
+                                "yearRange": "c-10:c+10",
+                                "dataFormat": "yyyy-MM-dd",
+                                "startDateFieldId": "from_date",
+                                "validator": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "format": "",
+                                "label": "To date",
+                                "datePickerType": "",
+                                "currentDateAs": "",
+                                "endDateFieldId": "",
+                                "readonly": "",
+                                "allowManual": "",
+                                "workflowVariable": "",
+                                "id": "to_date",
+                                "placeholder": "",
+                                "disableWeekends": "true",
+                                "value": "",
+                                "readonlyLabel": ""
+                            }
+                        },
+                        {
+                            "className": "org.joget.apps.form.lib.SelectBox",
+                            "properties": {
+                                "permissionHidden": "",
+                                "controlField": "",
+                                "multiple": "",
+                                "validator": {
+                                    "className": "org.joget.apps.form.lib.DefaultValidator",
+                                    "properties": {
+                                        "mandatory": "true",
+                                        "type": "",
+                                        "message": ""
+                                    }
+                                },
+                                "label": "Status",
+                                "readonly": "true",
+                                "size": "",
+                                "optionsBinder": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "options": [
+                                    {
+                                        "value": "new",
+                                        "label": "New",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "value": "posted",
+                                        "label": "Posted",
+                                        "grouping": ""
+                                    }
+                                ],
+                                "workflowVariable": "status",
+                                "id": "status",
+                                "value": "new",
+                                "readonlyLabel": ""
+                            }
+                        },
+                        {
+                            "className": "org.joget.apps.form.lib.Radio",
+                            "properties": {
+                                "fullWidth": "",
+                                "controlField": "",
+                                "readonly": "",
+                                "optionsBinder": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "options": [
+                                    {
+                                        "label": "Statement Rows",
+                                        "value": "rows",
+                                        "grouping": ""
+                                    },
+                                    {
+                                        "label": "Totals",
+                                        "value": "totals",
+                                        "grouping": ""
+                                    }
+                                ],
+                                "validator": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "workflowVariable": "",
+                                "label": "Totals",
+                                "id": "totals_radio",
+                                "value": "rows",
+                                "readonlyLabel": ""
+                            }
+                        }
+                    ],
+                    "className": "org.joget.apps.form.model.Column",
+                    "properties": {
+                        "width": "100%"
+                    }
+                }
+            ],
+            "className": "org.joget.apps.form.model.Section",
+            "properties": {
+                "visibilityControl": "",
+                "permissionReadonly": "",
+                "permission": {
+                    "className": "",
+                    "properties": {}
+                },
+                "label": "Statement Details",
+                "reverse": "",
+                "storeBinder": {
+                    "className": "",
+                    "properties": {}
+                },
+                "visibilityValue": "",
+                "regex": "",
+                "readonly": "",
+                "loadBinder": {
+                    "className": "",
+                    "properties": {}
+                },
+                "comment": "",
+                "id": "statement_header",
+                "join": "",
+                "readonlyLabel": ""
+            }
+        },
+        {
+            "elements": [
+                {
+                    "elements": [
+                        {
+                            "className": "org.joget.apps.form.lib.FileUpload",
+                            "properties": {
+                                "resizeMethod": "",
+                                "permissionType": "",
+                                "padding": "",
+                                "maxSizeMsg": "File size limit exceeded",
+                                "resizeWidth": "",
+                                "multiple": "",
+                                "validator": {
+                                    "className": "org.joget.apps.form.lib.DefaultValidator",
+                                    "properties": {
+                                        "type": "",
+                                        "message": "",
+                                        "mandatory": "true"
+                                    }
+                                },
+                                "maxSize": "",
+                                "label": "Statement File Upload",
+                                "resizeQuality": "0.8",
+                                "removeFile": "",
+                                "readonly": "",
+                                "attachment": "true",
+                                "size": "",
+                                "fileTypeMsg": "Invalid file type",
+                                "id": "statement_file",
+                                "resizeHeight": "",
+                                "fileType": ""
+                            }
+                        },
+                        {
+                            "className": "org.joget.apps.form.lib.CustomHTML",
+                            "properties": {
+                                "requiredSanitize": "",
+                                "autoPopulate": "",
+                                "label": "",
+                                "id": "custom_html",
+                                "value": "\n<script src=\"https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js\"></script>\n\n\n<script type=\"text/javascript\">\n\n\n// $(document).ready(processFile());\n\nfunction processFile() {\n\n    // Configuration constants\n    const conf = {\n        bankKeyFields: [1, 2, 3, 7],\n        bankTotalFields: [8, 12],\n        secuKeyFields: [2, 3, 4, 5, 6],\n        secuTotalFields: [7, 8, 10, 11, 12],\n        secuTotalAvgFields: [8],\n        secuLastFieldID: 14,\n        fieldNameBank: \"bank_all_transactions\",\n        fieldNameBankTotal: \"bank_total_transactions\",\n        fieldNameSecu: \"secu_all_transactions\",\n        fieldNameSecuTotal: \"secu_total_transactions\",\n        groupColNumber: 1,\n    };\n\n    let functionNameSecu, functionNameSecuTotal, isRows, isBank, accountType, bankName;\n    let functionNameBank, functionNameBankTotal, currentFunctionName, keyFields, totalFields;\n    let summaryRows;\n\n    \n    \n    /*\n    *\n    *\n    *.  Global State Management\n    *\n    */\n\n    initialize();\n\n    function initialize() {\n        setupAccountType();\n        setupBank();\n        setupRadioButtons();\n        setupListeners();\n        setCurrentFunctionName();\n        setupInitialAjaxCall();\n    }\n    \n    function setCurrentFunctionName() {\n        updateFunctionNames();\n        \n        if (accountType === 'bank') {\n            isBank = true;\n            keyFields = conf.bankKeyFields;\n            totalFields = conf.bankTotalFields;\n            if (isRows) {\n                currentFunctionName = functionNameBank;\n            } else {\n                currentFunctionName = functionNameBankTotal;\n            }\n        } else {\n            isBank = false;\n            keyFields = conf.secuKeyFields;\n            totalFields = conf.secuTotalFields;\n            if (isRows) {\n                currentFunctionName = functionNameSecu;\n            } else {\n                currentFunctionName = functionNameSecuTotal;\n            }\n        }\n    }\n\n    function setupRadioButtons() {\n        const defaultRadio = $('input[name=\"totals_radio\"][value=\"rows\"]');\n        if (!$('input[name=\"totals_radio\"]').is(':checked')) {\n            defaultRadio.prop('checked', true);\n            isRows = true;\n        } else {\n            isRows = true;\n        }\n    }\n    \n    function setupListeners() {\n        $('input[name=\"totals_radio\"]').on('change', handleRadioChange);\n        $('input[name=\"bank\"]').on('change', setupBank);\n        $('input[name=\"account_type\"]').on('change', setupAccountType);\n    }\n\n    function setupInitialAjaxCall() {\n        const fileUrl = getFileLink();\n        \n        console.log('1. IN setupInitialAjaxCall: ' + fileUrl);\n        console.log('2. IN setupInitialAjaxCall: ', 'account_type: ' + accountType, 'bankName: ' + bankName);\n        \n        makeAjaxCall(fileUrl, processContent);\n    }\n\n    function setupAccountType() {\n        accountType = FormUtil.getField(\"account_type\").val();\n        setCurrentFunctionName();\n    }\n\n    function setupBank() {\n        bankName = toSnakeCase(getSelectedText(\"bank\"));\n        setCurrentFunctionName();\n    }\n\n    function handleRadioChange() {\n        if ($(this).is(':checked')) {\n            isRows = $(this).val() === 'rows';\n            updateFunctionNames();\n            // makeAjaxCall(getFileLink(), processContent);\n        }\n        setCurrentFunctionName();\n        \n        console.log('IN handleRadioChange');\n        console.log('summaryRows: ', summaryRows);\n        console.log('currentFunctionName: ', currentFunctionName);\n        \n        summaryRows.forEach(row => callFunctionWithArgs(row));\n        \n    }\n    \n    function updateFunctionNames() {\n        functionNameBank = getOrFetchFunctionName(conf.fieldNameBank);\n        functionNameBankTotal = getOrFetchFunctionName(conf.fieldNameBankTotal);\n        functionNameSecu = getOrFetchFunctionName(conf.fieldNameSecu);\n        functionNameSecuTotal = getOrFetchFunctionName(conf.fieldNameSecuTotal);\n    }\n    \n    \n    /*\n    *\n    *\n    *.  Creation of Rows to Table\n    *\n    */\n\n    function processContent(fileContent) {\n        clearCurrentTableContent();\n        processFileContent(fileContent);\n        groupSimilarRows();\n    }\n\n    function processFileContent(fileContent, bankName) {\n        Papa.parse(fileContent, {\n            complete: saveResults,\n            error: onError\n        });\n        $.unblockUI();\n    }\n    \n    function saveResults(results) {\n        // 1st line contains headers, last is blank\n        results.data.forEach((line, index) => {\n            if (index > 0) {                       // skipping 1st line\n            \n                const fields = (bankName === 'as_lhv_pank') ? parseCSVLine(line[0]) : line;\n                \n                if (fields.length > 1) {           // skipping last empty line\n                \n                    callFunctionWithArgs(fields, index);\n                }\n            }\n        });\n    }\n\n    function callFunctionWithArgs(fields, index) {\n        if (isBank) {\n            fields.splice(6, 1);  // In bank row, the 6th field is empty\n        }\n        if (index !== undefined && index > -1) {\n            fields.unshift(index);\n        }\n\n        const fieldMapping = isBank ? mapBankFields(fields) : mapSecuFields(fields);\n\n        console.log('2.IN callFunctionWithArgs', currentFunctionName, bankName, ' index: ' + index);\n        console.log(fieldMapping);\n        \n        currentFunctionName({ 'result': JSON.stringify(fieldMapping) });\n    }\n    \n    \n    \n    /*\n    *\n    *\n    *.  Consolidation of Similar Rows\n    *\n    */\n\n    function groupSimilarRows() {\n        const rows = $('table tr.grid-row');\n        const groupingObject = createGroupingObject(keyFields, totalFields);\n\n        rows.each((_, row) => {\n            const currRow = $(row);\n            const rowKey = getRowKey(keyFields, currRow);\n            updateGroup(rowKey, currRow, groupingObject);\n            addTotalsToGroup(rowKey, currRow, groupingObject);\n            setGroupID(rowKey, currRow, groupingObject);\n        });\n\n        summaryRows = createSummaryRows(groupingObject, rows);\n    }\n\n    function createSummaryRows(groupingObject, rows) {\n        \n        currentFunctionName = functionNameSecuTotal;\n        \n        const summaryRows = [];\n        for (const key in groupingObject.groups) {\n            const group = groupingObject.groups[key];\n            \n            const groupNumber = group.groupNumber;\n            const numCells = rows.first().find('td').length;\n            const groupTotals = groupingObject.groupTotals[key];\n            const groupAverages = getRowAverages(groupingObject.groups[key].averages);\n            const rowTemplate = getRowTemplate(group, groupNumber, groupTotals, groupAverages);\n            \n            const newRow = Object.values(rowTemplate);\n    \n            summaryRows.push(newRow);\n        }\n        return summaryRows;\n    }\n    \n    function getRowTemplate(group, groupNumber, groupTotals, groupAverages) {\n        const templateRow = group.rows[0];\n        \n        // set ID, totals, averages\n        let summaryFields = {0: groupNumber};\n        conf.secuTotalFields.forEach(idx => summaryFields[idx] = idx in groupTotals ? groupTotals[idx] : \"\");\n        Object.keys(groupAverages).forEach(idx => summaryFields[idx] = groupAverages[idx]);\n        \n        // set other fields from the group other fields\n        for (let m = 1; m <= conf.secuLastFieldID; m++) {\n            if (!conf.secuTotalFields.includes(m)) {\n                summaryFields[m] = getValueFromTableCell(templateRow, m) || \"\";\n            }\n        }\n        \n        // remove field \"group\"\n        delete summaryFields[conf.groupColNumber];\n        \n        return summaryFields;\n    }\n\n    function createGroupingObject() {\n        return {\n            groups: {},\n            groupCounter: 1,\n            groupTotals: totalFields.reduce((acc, field) => ({ ...acc, [field]: 0 }), {}),\n            keyFields\n        };\n    }\n\n    function updateGroup(rowKey, row, groupingObject) {\n        if (!groupingObject.groups[rowKey]) {\n            groupingObject.groups[rowKey] = {\n                groupNumber: groupingObject.groupCounter++,\n                rows: [],\n                averages: {}\n            };\n            groupingObject.groupTotals[rowKey] = { ...groupingObject.groupTotals };\n        }\n\n        groupingObject.groups[rowKey].rows.push(row);\n        addAveragesToGroup(rowKey, row, groupingObject);\n    }\n\n    function addAveragesToGroup(rowKey, row, groupingObject) {\n        conf.secuTotalAvgFields.forEach(idx => {\n            const amount = parseFloat(getValueFromTableCell(row, idx));\n            if (!groupingObject.groups[rowKey].averages[idx]) {\n                groupingObject.groups[rowKey].averages[idx] = [];\n            }\n            groupingObject.groups[rowKey].averages[idx].push(amount);\n        });\n    }\n\n    function addTotalsToGroup(rowKey, row, groupingObject) {\n        totalFields.forEach(field => {\n            groupingObject.groupTotals[rowKey][field] += parseFloat(getValueFromTableCell(row, field));\n        });\n    }\n\n    function setGroupID(rowKey, row, groupingObject) {\n        const groupSeqId = groupingObject.groups[rowKey].groupNumber;\n        setFieldValue(row, conf.groupColNumber, groupSeqId);\n    }\n\n    function getRowAverages(averages) {\n        let rowAverages = {};\n        conf.secuTotalAvgFields.forEach(idx => {\n            const avgAmount = calculateAverage(averages[idx]);\n            rowAverages[idx] = avgAmount;\n        });\n        return rowAverages;\n    }\n    \n    function saveSecuSummaryTab(groupingObject, summaryRows) {\n        const secuSummaryTabRows = summaryRows.map((summaryRow, idx) => {\n            const group = groupingObject.groups[Object.keys(groupingObject.groups)[idx]];\n            return createSecuSummaryFields(group.rows[0], summaryRow);\n        });\n        // console.log('IN saveSecuSummaryTab', secuSummaryTabRows);\n    }\n\n    function createSecuSummaryFields(templateRow, summaryRow) {\n        const summaryFields = conf.secuTotalFields.map(idx => getValueFromTableCell(summaryRow, idx) || \"\");\n        for (let m = 0; m <= conf.secuLastFieldID; m++) {\n            if (!conf.secuTotalFields.includes(m)) {\n                summaryFields[m] = getValueFromTableCell(templateRow, m) || \"\";\n            }\n        }\n        summaryFields.splice(conf.groupColNumber, 1);\n        return summaryFields;\n    }\n\n\n    \n    /*\n     * \n     * Utility functions\n     *\n     */\n\n    function clearCurrentTableContent() {\n        $('table tr.grid-row').remove();\n    }\n\n    function getOrFetchFunctionName(fieldName) {\n        return getAddFunctionName(fieldName) || fetchFunctionNameFromDOM(fieldName);\n    }\n\n    function getAddFunctionName(fieldName) {\n        return window[FormUtil.getField(fieldName).attr(\"id\") + \"_add\"];\n    }\n\n    function fetchFunctionNameFromDOM(fieldName) {\n        const fieldObject = FormUtil.getField(fieldName);\n        return window[fieldObject.prevObject.attr(\"id\") + \"_add\"];\n    }\n\n    function calculateAverage(totalAvgArray) {\n        if (totalAvgArray.length === 0) return 0;\n        return allEqual(totalAvgArray) ? totalAvgArray[0] : totalAvgArray.reduce((a, b) => a + b, 0) / totalAvgArray.length;\n    }\n\n    function getRowKey(keyFields, row) {\n        return keyFields.map(idx => getValueFromTableCell(row, idx)).join('|');\n    }\n\n    function getValueFromTableCell(row, field) {\n        return row.find(`td:eq(${field}) .grid-cell`).text().trim() || 0;\n    }\n\n    function setFieldValue(row, colId, value) {\n        row.find(`td:eq(${colId})`).text(value);\n    }\n\n    function allEqual(arr) {\n        return arr.every(v => v === arr[0]);\n    }\n\n    function getSelectedText(fieldName) {\n        const selectBox = document.querySelector(`select[name=\"${fieldName}\"]`);\n        return selectBox.options[selectBox.selectedIndex].text;\n    }\n\n    function toSnakeCase(str) {\n        return str.toLowerCase().replace(/\\s+/g, '_');\n    }\n\n    function getFileLink() {\n        return $('.form-fileupload-value a').attr('href');\n    }\n\n    function onError(e) {\n        alert(\"Error loading the file. \" + e);\n    }\n\n    function mapSecuFields(fields) {\n        return {\n            transaction_id: fields[0] || \"\",\n            value_date: fields[1] || \"\",\n            transaction_date: fields[2] || \"\",\n            type: fields[3] || \"\",\n            ticker: fields[4] || \"\",\n            description: fields[5] || \"\",\n            quantity: fields[6] || \"\",\n            price: fields[7] || \"\",\n            currency: fields[8] || \"\",\n            amount: fields[9] || \"\",\n            fee: fields[10] || \"\",\n            total_amount: fields[11] || \"\",\n            reference: fields[12] || \"\",\n            comment: fields[13] || \"\",\n        };\n    }\n    \n    function mapBankFields(fields) {\n        return {\n            transaction_id: fields[0] || \"\",\n            account_number: fields[1] || \"\",\n            doc_number: fields[2] || \"\",\n            payment_date: fields[3] || \"\",\n            other_side_account: fields[4] || \"\",\n            other_side_name: fields[5] || \"\",\n            other_side_bank: fields[6] || \"\",\n            d_c: fields[7] || \"\",\n            payment_amount: fields[8] || \"\",\n            reference_number: fields[9] || \"\",\n            archival_number: fields[10] || \"\",\n            payment_description: fields[11] || \"\",\n            transaction_fee: fields[12] || \"\",\n            currency: fields[13] || \"\",\n            customer_id: fields[14] || \"\",\n            other_side_bic: fields[15] || \"\",\n            initiator: fields[16] || \"\",\n            transaction_reference: fields[17] || \"\",\n            provider_reference: fields[18] || \"\",\n        };\n    }\n    \n    function parseCSVLine(line) {\n        const result = [];\n        let inQuotes = false;\n        let field = '';\n        const delimiter = ',';\n        const enclosure = '\"';\n\n        for (let i = 0; i < line.length; i++) {\n            const char = line[i];\n            if (char === enclosure) {\n                if (inQuotes && line[i + 1] === enclosure) {\n                    field += enclosure; // Handle escaped quote\n                    i++;\n                } else {\n                    inQuotes = !inQuotes;\n                }\n            } else if (char === delimiter && !inQuotes) {\n                result.push(field);\n                field = '';\n            } else {\n                field += char;\n            }\n        }\n        if (field) {\n            result.push(field);\n        }\n        return result;\n    }\n\n    function makeAjaxCall(url, onSuccess) {\n        $.ajax({\n            url: url,\n            method: \"get\",\n            cache: false,\n            success: onSuccess,\n            error: onError\n        });\n    }\n}\n\n    \n</script>\n"
+                            }
+                        }
+                    ],
+                    "className": "org.joget.apps.form.model.Column",
+                    "properties": {
+                        "width": "100%"
+                    }
+                }
+            ],
+            "className": "org.joget.apps.form.model.Section",
+            "properties": {
+                "visibilityControl": "",
+                "permissionReadonly": "",
+                "permission": {
+                    "className": "",
+                    "properties": {}
+                },
+                "label": "Statement",
+                "reverse": "",
+                "storeBinder": {
+                    "className": "",
+                    "properties": {}
+                },
+                "visibilityValue": "",
+                "regex": "",
+                "readonly": "",
+                "loadBinder": {
+                    "className": "",
+                    "properties": {}
+                },
+                "comment": "",
+                "id": "statement_details",
+                "join": "",
+                "readonlyLabel": ""
+            }
+        },
+        {
+            "elements": [
+                {
+                    "elements": [
+                        {
+                            "className": "org.joget.plugin.enterprise.FormGrid",
+                            "properties": {
+                                "validateMaxRow": "",
+                                "formDefId": "bankAccountTransaction",
+                                "validator": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "pageSize": "50",
+                                "requestParams": [],
+                                "enableSorting": "true",
+                                "storeBinder": {
+                                    "className": "org.joget.plugin.enterprise.MultirowFormBinder",
+                                    "properties": {
+                                        "formDefId": "bankAccountTransaction",
+                                        "foreignKey": "statement_id"
+                                    }
+                                },
+                                "readonly": "",
+                                "deleteGridData": "",
+                                "options": [
+                                    {
+                                        "format": "",
+                                        "width": "10px",
+                                        "label": "ID",
+                                        "formatType": "decimal",
+                                        "value": "transaction_id"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Doc. nr.",
+                                        "formatType": "text",
+                                        "value": "doc_number"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Payment Date",
+                                        "formatType": "text",
+                                        "value": "payment_date"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Other side account",
+                                        "formatType": "text",
+                                        "value": "other_side_account"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Other side name",
+                                        "formatType": "text",
+                                        "value": "other_side_name"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Other side bank",
+                                        "formatType": "text",
+                                        "value": "other_side_bank"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Debit / Credit",
+                                        "formatType": "text",
+                                        "value": "d_c"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Amount",
+                                        "formatType": "text",
+                                        "value": "payment_amount"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "1000px",
+                                        "label": "Desc.",
+                                        "formatType": "text",
+                                        "value": "payment_description"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Fee",
+                                        "formatType": "text",
+                                        "value": "transaction_fee"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Currency",
+                                        "formatType": "text",
+                                        "value": "currency"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Customer",
+                                        "formatType": "text",
+                                        "value": "customer_id"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "BIC",
+                                        "formatType": "text",
+                                        "value": "other_side_bic"
+                                    }
+                                ],
+                                "sortField": "transaction_id",
+                                "id": "bank_all_transactions",
+                                "abortRelatedRunningProcesses": "",
+                                "height": "500",
+                                "showRowNumber": "",
+                                "disabledDelete": "true",
+                                "validateMinRow": "",
+                                "submit-label-normal": "",
+                                "uniqueKey": "",
+                                "errorMessage": "Invalid number of rows",
+                                "deleteSubformData": "",
+                                "deleteMessage": "Delete row?",
+                                "label": "Statement Transactions",
+                                "deleteFiles": "",
+                                "loadBinder": {
+                                    "className": "org.joget.plugin.enterprise.MultirowFormBinder",
+                                    "properties": {
+                                        "formDefId": "bankAccountTransaction",
+                                        "foreignKey": "statement_id"
+                                    }
+                                },
+                                "disabledAdd": "true",
+                                "submit-label-readonly": "",
+                                "width": "900",
+                                "readonlyLabel": ""
+                            }
+                        }
+                    ],
+                    "className": "org.joget.apps.form.model.Column",
+                    "properties": {
+                        "width": "100%"
+                    }
+                }
+            ],
+            "className": "org.joget.apps.form.model.Section",
+            "properties": {
+                "visibilityControl": "account_type;totals_radio",
+                "permissionReadonly": "",
+                "permission": {
+                    "className": "",
+                    "properties": {}
+                },
+                "label": "Bank Account Transactions",
+                "reverse": ";",
+                "storeBinder": {
+                    "className": "",
+                    "properties": {}
+                },
+                "visibilityValue": "bank;rows",
+                "regex": ";",
+                "readonly": "",
+                "loadBinder": {
+                    "className": "",
+                    "properties": {}
+                },
+                "comment": "",
+                "id": "bank_all_transactions",
+                "join": ";",
+                "readonlyLabel": ""
+            }
+        },
+        {
+            "elements": [
+                {
+                    "elements": [
+                        {
+                            "className": "org.joget.plugin.enterprise.FormGrid",
+                            "properties": {
+                                "validateMaxRow": "",
+                                "formDefId": "bankTotalTransaction",
+                                "validator": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "pageSize": "50",
+                                "requestParams": [],
+                                "enableSorting": "true",
+                                "storeBinder": {
+                                    "className": "org.joget.plugin.enterprise.MultirowFormBinder",
+                                    "properties": {
+                                        "formDefId": "bankTotalTransaction",
+                                        "foreignKey": "statement_id"
+                                    }
+                                },
+                                "readonly": "",
+                                "deleteGridData": "",
+                                "options": [
+                                    {
+                                        "format": "",
+                                        "width": "10px",
+                                        "label": "ID",
+                                        "formatType": "decimal",
+                                        "value": "transaction_id"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Doc. nr.",
+                                        "formatType": "text",
+                                        "value": "doc_number"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Payment Date",
+                                        "formatType": "text",
+                                        "value": "payment_date"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Other side account",
+                                        "formatType": "text",
+                                        "value": "other_side_account"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Other side name",
+                                        "formatType": "text",
+                                        "value": "other_side_name"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Other side bank",
+                                        "formatType": "text",
+                                        "value": "other_side_bank"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Debit / Credit",
+                                        "formatType": "text",
+                                        "value": "d_c"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Amount",
+                                        "formatType": "text",
+                                        "value": "payment_amount"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "1000px",
+                                        "label": "Desc.",
+                                        "formatType": "text",
+                                        "value": "payment_description"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Fee",
+                                        "formatType": "text",
+                                        "value": "transaction_fee"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Currency",
+                                        "formatType": "text",
+                                        "value": "currency"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Customer",
+                                        "formatType": "text",
+                                        "value": "customer_id"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "BIC",
+                                        "formatType": "text",
+                                        "value": "other_side_bic"
+                                    }
+                                ],
+                                "sortField": "transaction_id",
+                                "id": "bank_total_transactions",
+                                "abortRelatedRunningProcesses": "",
+                                "height": "500",
+                                "showRowNumber": "",
+                                "disabledDelete": "true",
+                                "validateMinRow": "",
+                                "submit-label-normal": "",
+                                "uniqueKey": "",
+                                "errorMessage": "Invalid number of rows",
+                                "deleteSubformData": "",
+                                "deleteMessage": "Delete row?",
+                                "label": "Bank Total Transactions",
+                                "deleteFiles": "",
+                                "loadBinder": {
+                                    "className": "org.joget.plugin.enterprise.MultirowFormBinder",
+                                    "properties": {
+                                        "formDefId": "bankTotalTransaction",
+                                        "foreignKey": "statement_id"
+                                    }
+                                },
+                                "disabledAdd": "",
+                                "submit-label-readonly": "",
+                                "width": "900",
+                                "readonlyLabel": ""
+                            }
+                        }
+                    ],
+                    "className": "org.joget.apps.form.model.Column",
+                    "properties": {
+                        "width": "100%"
+                    }
+                }
+            ],
+            "className": "org.joget.apps.form.model.Section",
+            "properties": {
+                "visibilityControl": "account_type;totals_radio",
+                "permissionReadonly": "",
+                "permission": {
+                    "className": "",
+                    "properties": {}
+                },
+                "label": "Bank Total Transactions",
+                "reverse": ";",
+                "storeBinder": {
+                    "className": "",
+                    "properties": {}
+                },
+                "visibilityValue": "bank;totals",
+                "regex": ";",
+                "readonly": "",
+                "loadBinder": {
+                    "className": "",
+                    "properties": {}
+                },
+                "comment": "",
+                "id": "bank_total_transactions",
+                "join": ";",
+                "readonlyLabel": ""
+            }
+        },
+        {
+            "elements": [
+                {
+                    "elements": [
+                        {
+                            "className": "org.joget.plugin.enterprise.FormGrid",
+                            "properties": {
+                                "validateMaxRow": "",
+                                "formDefId": "securityTransaction",
+                                "validator": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "pageSize": "50",
+                                "requestParams": [],
+                                "enableSorting": "true",
+                                "storeBinder": {
+                                    "className": "org.joget.plugin.enterprise.MultirowFormBinder",
+                                    "properties": {
+                                        "formDefId": "securityTransaction",
+                                        "foreignKey": "statement_id"
+                                    }
+                                },
+                                "readonly": "true",
+                                "deleteGridData": "true",
+                                "options": [
+                                    {
+                                        "format": "",
+                                        "width": "10px",
+                                        "label": "ID",
+                                        "formatType": "decimal",
+                                        "value": "transaction_id"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Value Date",
+                                        "formatType": "text",
+                                        "value": "value_date"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Transaction Date",
+                                        "formatType": "text",
+                                        "value": "transaction_date"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Type",
+                                        "formatType": "text",
+                                        "value": "type"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Ticker",
+                                        "formatType": "text",
+                                        "value": "ticker"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Description",
+                                        "formatType": "text",
+                                        "value": "description"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Quantity",
+                                        "formatType": "text",
+                                        "value": "quantity"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Price",
+                                        "formatType": "text",
+                                        "value": "price"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Currency",
+                                        "formatType": "text",
+                                        "value": "currency"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Amount",
+                                        "formatType": "text",
+                                        "value": "amount"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Fee",
+                                        "formatType": "text",
+                                        "value": "fee"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Total",
+                                        "formatType": "text",
+                                        "value": "total_amount"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Reference",
+                                        "formatType": "text",
+                                        "value": "reference"
+                                    }
+                                ],
+                                "sortField": "transaction_id",
+                                "id": "secu_all_transactions",
+                                "abortRelatedRunningProcesses": "",
+                                "height": "500",
+                                "permissionHidden": "",
+                                "showRowNumber": "",
+                                "disabledDelete": "true",
+                                "validateMinRow": "",
+                                "submit-label-normal": "",
+                                "uniqueKey": "",
+                                "errorMessage": "Invalid number of rows",
+                                "deleteSubformData": "true",
+                                "deleteMessage": "Delete row?",
+                                "label": "Statement Transactions",
+                                "deleteFiles": "",
+                                "loadBinder": {
+                                    "className": "org.joget.plugin.enterprise.MultirowFormBinder",
+                                    "properties": {
+                                        "formDefId": "securityTransaction",
+                                        "foreignKey": "statement_id"
+                                    }
+                                },
+                                "disabledAdd": "true",
+                                "submit-label-readonly": "",
+                                "width": "900",
+                                "readonlyLabel": ""
+                            }
+                        }
+                    ],
+                    "className": "org.joget.apps.form.model.Column",
+                    "properties": {
+                        "width": "100%"
+                    }
+                }
+            ],
+            "className": "org.joget.apps.form.model.Section",
+            "properties": {
+                "visibilityControl": "account_type;totals_radio",
+                "permissionReadonly": "",
+                "permission": {
+                    "className": "",
+                    "properties": {}
+                },
+                "label": "Securities Transactions",
+                "reverse": ";",
+                "storeBinder": {
+                    "className": "",
+                    "properties": {}
+                },
+                "visibilityValue": "secu;rows",
+                "regex": ";",
+                "readonly": "",
+                "loadBinder": {
+                    "className": "",
+                    "properties": {}
+                },
+                "comment": "",
+                "id": "secu_all_transactions",
+                "join": ";",
+                "readonlyLabel": ""
+            }
+        },
+        {
+            "elements": [
+                {
+                    "elements": [
+                        {
+                            "className": "org.joget.plugin.enterprise.FormGrid",
+                            "properties": {
+                                "validateMaxRow": "",
+                                "formDefId": "secuTotalTransaction",
+                                "validator": {
+                                    "className": "",
+                                    "properties": {}
+                                },
+                                "pageSize": "50",
+                                "requestParams": [],
+                                "enableSorting": "true",
+                                "storeBinder": {
+                                    "className": "org.joget.plugin.enterprise.MultirowFormBinder",
+                                    "properties": {
+                                        "formDefId": "secuTotalTransaction",
+                                        "foreignKey": "statement_id"
+                                    }
+                                },
+                                "readonly": "",
+                                "deleteGridData": "",
+                                "options": [
+                                    {
+                                        "format": "",
+                                        "width": "10px",
+                                        "label": "ID",
+                                        "formatType": "text",
+                                        "value": "transaction_id"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Value Date",
+                                        "formatType": "text",
+                                        "value": "value_date"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Transaction Date",
+                                        "formatType": "text",
+                                        "value": "transaction_date"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Type",
+                                        "formatType": "text",
+                                        "value": "type"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Ticker",
+                                        "formatType": "text",
+                                        "value": "ticker"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Description",
+                                        "formatType": "text",
+                                        "value": "description"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Quantity",
+                                        "formatType": "text",
+                                        "value": "quantity"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Price",
+                                        "formatType": "text",
+                                        "value": "price"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Currency",
+                                        "formatType": "text",
+                                        "value": "currency"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Amount",
+                                        "formatType": "text",
+                                        "value": "amount"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Fee",
+                                        "formatType": "text",
+                                        "value": "fee"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Total",
+                                        "formatType": "text",
+                                        "value": "total_amount"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Reference",
+                                        "formatType": "text",
+                                        "value": "reference"
+                                    },
+                                    {
+                                        "format": "",
+                                        "width": "",
+                                        "label": "Comment",
+                                        "formatType": "text",
+                                        "value": "comment"
+                                    }
+                                ],
+                                "sortField": "transaction_id",
+                                "id": "secu_total_transactions",
+                                "abortRelatedRunningProcesses": "",
+                                "height": "500",
+                                "permissionHidden": "",
+                                "showRowNumber": "",
+                                "disabledDelete": "",
+                                "validateMinRow": "",
+                                "submit-label-normal": "",
+                                "uniqueKey": "",
+                                "errorMessage": "Invalid number of rows",
+                                "deleteSubformData": "",
+                                "deleteMessage": "Delete row?",
+                                "label": "Statement Total Transactions",
+                                "deleteFiles": "",
+                                "loadBinder": {
+                                    "className": "org.joget.plugin.enterprise.MultirowFormBinder",
+                                    "properties": {
+                                        "formDefId": "secuTotalTransaction",
+                                        "foreignKey": "statement_id"
+                                    }
+                                },
+                                "disabledAdd": "true",
+                                "submit-label-readonly": "",
+                                "width": "900",
+                                "readonlyLabel": ""
+                            }
+                        }
+                    ],
+                    "className": "org.joget.apps.form.model.Column",
+                    "properties": {
+                        "width": "100%"
+                    }
+                }
+            ],
+            "className": "org.joget.apps.form.model.Section",
+            "properties": {
+                "visibilityControl": "account_type;totals_radio",
+                "permissionReadonly": "",
+                "permission": {
+                    "className": "",
+                    "properties": {}
+                },
+                "label": "Security Total Transactions",
+                "reverse": ";",
+                "storeBinder": {
+                    "className": "",
+                    "properties": {}
+                },
+                "visibilityValue": "secu;totals",
+                "regex": ";",
+                "readonly": "",
+                "loadBinder": {
+                    "className": "",
+                    "properties": {}
+                },
+                "comment": "",
+                "id": "secu_total_transactions",
+                "join": ";",
+                "readonlyLabel": ""
+            }
+        }
+    ],
+    "className": "org.joget.apps.form.model.Form",
+    "properties": {
+        "noPermissionMessage": "",
+        "loadBinder": {
+            "className": "org.joget.apps.form.lib.WorkflowFormBinder",
+            "properties": {}
+        },
+        "name": "01.00 - Statement",
+        "description": "",
+        "postProcessorRunOn": "both",
+        "permission": {
+            "className": "",
+            "properties": {}
+        },
+        "id": "bankStatement",
+        "storeBinder": {
+            "className": "org.joget.apps.form.lib.WorkflowFormBinder",
+            "properties": {}
+        },
+        "tableName": "bank_statement",
+        "postProcessor": {
+            "className": "com.fiscaladmin.gam.filereceiver.lib.FileReceiver",
+            "properties": {}
+        }
+    }
+}
