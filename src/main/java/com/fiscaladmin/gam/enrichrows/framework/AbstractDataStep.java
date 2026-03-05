@@ -1,22 +1,58 @@
 package com.fiscaladmin.gam.enrichrows.framework;
 
+import com.fiscaladmin.gam.enrichrows.constants.DomainConstants;
+import com.fiscaladmin.gam.framework.status.StatusManager;
 import org.joget.apps.form.dao.FormDataDao;
 import org.joget.apps.form.model.FormRow;
 import org.joget.apps.form.model.FormRowSet;
 import org.joget.commons.util.LogUtil;
 import java.util.Date;
+import java.util.Map;
 
 public abstract class AbstractDataStep implements DataStep {
 
-    protected static final String STATUS_NEW = "new";
-    protected static final String STATUS_ENRICHED = "enriched";
-    protected static final String STATUS_FAILED = "failed";
-    protected static final String STATUS_POSTED = "posted";
-
     private final String className;
+    protected Map<String, Object> properties;
+    protected StatusManager statusManager;
+    private int batchIndex = -1;
+    private int batchTotal = -1;
 
     public AbstractDataStep() {
         this.className = getClass().getName();
+    }
+
+    @Override
+    public void setProperties(Map<String, Object> properties) {
+        this.properties = properties;
+    }
+
+    public void setStatusManager(StatusManager statusManager) {
+        this.statusManager = statusManager;
+    }
+
+    @Override
+    public void setBatchContext(int currentIndex, int totalCount) {
+        this.batchIndex = currentIndex;
+        this.batchTotal = totalCount;
+    }
+
+    protected boolean isLastInBatch() {
+        return batchIndex >= 0 && batchTotal >= 0 && batchIndex == batchTotal - 1;
+    }
+
+    protected int getBatchIndex() {
+        return batchIndex;
+    }
+
+    protected int getBatchTotal() {
+        return batchTotal;
+    }
+
+    protected Object getProperty(String key, Object defaultValue) {
+        if (properties != null && properties.containsKey(key)) {
+            return properties.get(key);
+        }
+        return defaultValue;
     }
 
     @Override
@@ -93,17 +129,20 @@ public abstract class AbstractDataStep implements DataStep {
 
     /**
      * Helper method to update transaction status
+     * @deprecated Use StatusManager instead for status transitions
      */
+    @Deprecated
     protected boolean updateTransactionStatus(DataContext context,
                                               FormDataDao formDataDao,
                                               String status) {
+        LogUtil.warn(className, "updateTransactionStatus() is deprecated — use StatusManager");
         try {
             FormRow trxRow = context.getTransactionRow();
             trxRow.setProperty("status", status);
             trxRow.setProperty("last_modified", new Date().toString());
 
-            String tableName = "bank".equals(context.getSourceType()) ?
-                    "bank_total_trx" : "secu_total_trx";
+            String tableName = DomainConstants.SOURCE_TYPE_BANK.equals(context.getSourceType()) ?
+                    DomainConstants.TABLE_BANK_TOTAL_TRX : DomainConstants.TABLE_SECU_TOTAL_TRX;
 
             return saveFormRow(formDataDao, tableName, trxRow);
         } catch (Exception e) {
@@ -131,14 +170,8 @@ public abstract class AbstractDataStep implements DataStep {
             auditRow.setProperty("details", details);
             auditRow.setProperty("step_name", getStepName());
             auditRow.setProperty("timestamp", new Date().toString());
-            // Ensure status is never null
-            String status = context.getProcessingStatus();
-            if (status == null || status.isEmpty()) {
-                status = "processing";
-            }
-            auditRow.setProperty("status", status);
 
-            saveFormRow(formDataDao, "audit_log", auditRow);
+            saveFormRow(formDataDao, DomainConstants.TABLE_AUDIT_LOG, auditRow);
         } catch (Exception e) {
             LogUtil.error(className, e, "Error creating audit log");
         }

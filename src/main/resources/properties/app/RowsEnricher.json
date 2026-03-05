@@ -1,0 +1,110 @@
+[
+    {
+        "title": "General",
+        "properties": [
+            {
+                "name": "pipelineVersion",
+                "label": "Pipeline Version",
+                "type": "textfield",
+                "value": "3.0",
+                "required": "false"
+            },
+            {
+                "name": "stopOnError",
+                "label": "Stop Pipeline on Error",
+                "type": "selectbox",
+                "value": "false",
+                "options": [
+                    {"value": "true", "label": "Yes - Stop on first error"},
+                    {"value": "false", "label": "No - Continue processing"}
+                ]
+            },
+            {
+                "name": "baseCurrency",
+                "label": "Base Currency",
+                "type": "textfield",
+                "value": "EUR",
+                "required": "false"
+            },
+            {
+                "name": "batchSize",
+                "label": "Statement Batch Size",
+                "type": "textfield",
+                "value": "100",
+                "required": "false"
+            }
+        ]
+    },
+    {
+        "title": "Enrichment Pipeline",
+        "properties": [
+            {
+                "name": "maxFxRateAgeDays",
+                "label": "Maximum FX Rate Age (Days)",
+                "type": "textfield",
+                "value": "5",
+                "required": "false"
+            },
+            {
+                "name": "confidenceThresholdHigh",
+                "label": "Customer Identification - High Confidence Threshold (%)",
+                "type": "textfield",
+                "value": "80",
+                "required": "false"
+            },
+            {
+                "name": "confidenceThresholdMedium",
+                "label": "Customer Identification - Medium Confidence Threshold (%)",
+                "type": "textfield",
+                "value": "50",
+                "required": "false"
+            },
+            {
+                "name": "settlementDays",
+                "label": "Settlement Days (T+N)",
+                "type": "textfield",
+                "value": "2",
+                "required": "false"
+            }
+        ]
+    },
+    {
+        "title": "Description Builder",
+        "properties": [
+            {
+                "name": "bankDescriptionFields",
+                "label": "Bank Description Fields (comma-separated)",
+                "type": "textfield",
+                "value": "payment_description,reference_number,other_side_name,other_side_bic,other_side_account",
+                "required": "false"
+            },
+            {
+                "name": "secuDescriptionFields",
+                "label": "Securities Description Fields (comma-separated)",
+                "type": "textfield",
+                "value": "description,reference,ticker,quantity,price",
+                "required": "false"
+            },
+            {
+                "name": "descriptionMaxLength",
+                "label": "Description Maximum Length",
+                "type": "textfield",
+                "value": "2000",
+                "required": "false"
+            }
+        ]
+    },
+    {
+        "title": "Securities D/C Mapping",
+        "properties": [
+            {
+                "name": "secuDebitCreditMapping",
+                "label": "Securities Debit/Credit Mapping (JSON)",
+                "description": "JSON map of transaction type to D/C. Example: {\"BUY\":\"D\",\"SELL\":\"C\",\"DIVIDEND\":\"C\"}",
+                "type": "textarea",
+                "value": "{\"BUY\":\"D\",\"SELL\":\"C\",\"DIVIDEND\":\"C\",\"INTEREST\":\"C\",\"FEE\":\"D\",\"TAX\":\"D\",\"CORPORATE_ACTION\":\"N\",\"PURCHASE\":\"D\",\"DISPOSE\":\"C\",\"COUPON\":\"C\",\"CUSTODY_FEE\":\"D\",\"SAFEKEEPING\":\"D\",\"TRANSFER_IN\":\"C\",\"TRANSFER_OUT\":\"D\"}",
+                "required": "false"
+            }
+        ]
+    }
+]

@@ -5,6 +5,8 @@ import com.fiscaladmin.gam.enrichrows.constants.FrameworkConstants;
 import com.fiscaladmin.gam.enrichrows.framework.AbstractDataStep;
 import com.fiscaladmin.gam.enrichrows.framework.StepResult;
 import com.fiscaladmin.gam.enrichrows.framework.DataContext;
+import com.fiscaladmin.gam.framework.status.EntityType;
+import com.fiscaladmin.gam.framework.status.Status;
 import org.joget.apps.form.dao.FormDataDao;
 import org.joget.apps.form.model.FormRow;
 import org.joget.apps.form.model.FormRowSet;
@@ -37,7 +39,7 @@ public class CurrencyValidationStep extends AbstractDataStep {
                 LogUtil.error(CLASS_NAME, null,
                         "Currency is missing for transaction: " + context.getTransactionId());
                 createCurrencyException(context, formDataDao,
-                        "MISSING_CURRENCY", "Currency code is missing");
+                        DomainConstants.EXCEPTION_MISSING_CURRENCY, "Currency code is missing");
                 return new StepResult(false, "Currency validation failed: Currency code is missing");
             }
 
@@ -91,7 +93,7 @@ public class CurrencyValidationStep extends AbstractDataStep {
             LogUtil.error(CLASS_NAME, e,
                     "Unexpected error validating currency for transaction: " + context.getTransactionId());
             createCurrencyException(context, formDataDao,
-                    "CURRENCY_VALIDATION_ERROR",
+                    DomainConstants.EXCEPTION_CURRENCY_VALIDATION_ERROR,
                     "Error during currency validation: " + e.getMessage());
             return new StepResult(false, "Currency validation error: " + e.getMessage());
         }
@@ -217,8 +219,20 @@ public class CurrencyValidationStep extends AbstractDataStep {
             String priority = calculateExceptionPriority(context);
             exceptionRow.setProperty("priority", priority);
 
+            // Set assignment based on priority
+            if ("critical".equals(priority) || "high".equals(priority)) {
+                exceptionRow.setProperty("assigned_to", "supervisor");
+                exceptionRow.setProperty("due_date", calculateDueDate(1));
+            } else if ("medium".equals(priority)) {
+                exceptionRow.setProperty("assigned_to", "operations");
+                exceptionRow.setProperty("due_date", calculateDueDate(3));
+            } else {
+                exceptionRow.setProperty("assigned_to", "operations");
+                exceptionRow.setProperty("due_date", calculateDueDate(7));
+            }
+
             // Set status
-            exceptionRow.setProperty("status", FrameworkConstants.STATUS_PENDING);
+            exceptionRow.setProperty("status", Status.OPEN.getCode());
 
             // Additional context for resolution
             if (DomainConstants.SOURCE_TYPE_BANK.equals(context.getSourceType())) {
@@ -234,6 +248,15 @@ public class CurrencyValidationStep extends AbstractDataStep {
             rowSet.add(exceptionRow);
             formDataDao.saveOrUpdate(null, DomainConstants.TABLE_EXCEPTION_QUEUE, rowSet);
 
+            if (statusManager != null) {
+                try {
+                    statusManager.transition(formDataDao, EntityType.EXCEPTION, exceptionId,
+                            Status.OPEN, "rows-enrichment", exceptionDetails);
+                } catch (Exception e) {
+                    LogUtil.warn(CLASS_NAME, "Could not transition exception status: " + e.getMessage());
+                }
+            }
+
             LogUtil.info(CLASS_NAME, "Created currency exception for transaction: " +
                     context.getTransactionId() + ", Type: " + exceptionType);
 
@@ -241,6 +264,15 @@ public class CurrencyValidationStep extends AbstractDataStep {
             LogUtil.error(CLASS_NAME, e,
                     "Error creating currency exception for transaction: " + context.getTransactionId());
         }
+    }
+
+    /**
+     * Calculate due date based on number of days
+     */
+    private String calculateDueDate(int days) {
+        Calendar cal = Calendar.getInstance();
+        cal.add(Calendar.DAY_OF_MONTH, days);
+        return new java.text.SimpleDateFormat("yyyy-MM-dd").format(cal.getTime());
     }
 
     /**

@@ -3,6 +3,10 @@ package com.fiscaladmin.gam.enrichrows.loader;
 import com.fiscaladmin.gam.enrichrows.framework.*;
 import com.fiscaladmin.gam.enrichrows.constants.DomainConstants;
 import com.fiscaladmin.gam.enrichrows.constants.FrameworkConstants;
+import com.fiscaladmin.gam.framework.status.EntityType;
+import com.fiscaladmin.gam.framework.status.InvalidTransitionException;
+import com.fiscaladmin.gam.framework.status.Status;
+import com.fiscaladmin.gam.framework.status.StatusManager;
 import org.joget.apps.form.dao.FormDataDao;
 import org.joget.apps.form.model.FormRow;
 import org.joget.apps.form.model.FormRowSet;
@@ -16,7 +20,13 @@ import java.util.*;
 public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
     
     private static final String CLASS_NAME = TransactionDataLoader.class.getName();
-    
+
+    private StatusManager statusManager;
+
+    public void setStatusManager(StatusManager statusManager) {
+        this.statusManager = statusManager;
+    }
+
     @Override
     public String getLoaderName() {
         return "GL Transaction Data Loader";
@@ -37,13 +47,13 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
     }
     
     @Override
-    protected List<DataContext> performLoad(FormDataDao dao, 
+    protected List<DataContext> performLoad(FormDataDao dao,
                                                    Map<String, Object> parameters) {
         List<DataContext> transactions = new ArrayList<>();
-        
+
         try {
             // Get all unprocessed statements
-            List<FormRow> unprocessedStatements = fetchUnprocessedStatements(dao);
+            List<FormRow> unprocessedStatements = fetchUnprocessedStatements(dao, parameters);
             
             LogUtil.info(CLASS_NAME, "Found " + unprocessedStatements.size() + " unprocessed statements");
 
@@ -51,10 +61,9 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
             for (FormRow statementRow : unprocessedStatements) {
                 String statementId = statementRow.getId();
                 String accountType = statementRow.getProperty(DomainConstants.FIELD_ACCOUNT_TYPE);
-                
-                // Mark statement as processing
-                markStatementAsProcessing(statementRow, dao);
-                
+
+                // Statement stays CONSOLIDATED until batch completion in persister
+
                 if (DomainConstants.SOURCE_TYPE_BANK.equals(accountType)) {
                     transactions.addAll(fetchBankTransactions(dao, statementRow));
                 } else if (DomainConstants.SOURCE_TYPE_SECU.equals(accountType)) {
@@ -75,19 +84,28 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
     /**
      * Fetch all unprocessed statements
      */
-    private List<FormRow> fetchUnprocessedStatements(FormDataDao dao) {
+    private List<FormRow> fetchUnprocessedStatements(FormDataDao dao, Map<String, Object> parameters) {
         // Get ALL statements first - use configured table name
         String statementTable = DomainConstants.TABLE_BANK_STATEMENT;
         String statusField = FrameworkConstants.FIELD_STATUS;
-        String newStatus = FrameworkConstants.STATUS_NEW;
-        
-        FormRowSet statements = loadRecords(dao, 
+        String newStatus = Status.CONSOLIDATED.getCode();
+
+        int batchSize = 100;
+        if (parameters != null && parameters.containsKey("batchSize")) {
+            try {
+                batchSize = Integer.parseInt(parameters.get("batchSize").toString());
+            } catch (NumberFormatException e) {
+                LogUtil.warn(CLASS_NAME, "Invalid batchSize, using default 100");
+            }
+        }
+
+        FormRowSet statements = loadRecords(dao,
             statementTable,
             null,  // No condition - get all
             null,  // No params
             "from_date",  // Sort by from_date
             false,  // Ascending order
-            100  // Use configured batch size
+            batchSize
         );
         
         // Filter for unprocessed statements
@@ -107,7 +125,7 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
             String bankTable = DomainConstants.TABLE_BANK_TOTAL_TRX;
             String statementIdField = DomainConstants.FIELD_STATEMENT_ID;
             String statusField = FrameworkConstants.FIELD_STATUS;
-            String newStatus = FrameworkConstants.STATUS_NEW;
+            String newStatus = Status.NEW.getCode();
             
             FormRowSet bankTrxRows = loadRecords(dao,
                 bankTable,
@@ -125,16 +143,17 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
             
             List<FormRow> filteredRows = filterByCriteria(bankTrxRows, criteria);
             
-            // Convert to contexts
+            // Convert to contexts and transition to PROCESSING
             for (FormRow trxRow : filteredRows) {
                 DataContext context = createBankDataContext(trxRow, statementRow);
+                transitionToProcessing(dao, EntityType.BANK_TRX, context.getTransactionId());
                 contexts.add(context);
             }
 
         } catch (Exception e) {
             LogUtil.error(CLASS_NAME, e, "Error fetching bank transactions");
         }
-        
+
         return contexts;
     }
     
@@ -151,7 +170,7 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
             String secuTable = DomainConstants.TABLE_SECU_TOTAL_TRX;
             String statementIdField = DomainConstants.FIELD_STATEMENT_ID;
             String statusField = FrameworkConstants.FIELD_STATUS;
-            String newStatus = FrameworkConstants.STATUS_NEW;
+            String newStatus = Status.NEW.getCode();
             
             FormRowSet secuTrxRows = loadRecords(dao,
                 secuTable,
@@ -169,16 +188,17 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
             
             List<FormRow> filteredRows = filterByCriteria(secuTrxRows, criteria);
             
-            // Convert to contexts
+            // Convert to contexts and transition to PROCESSING
             for (FormRow trxRow : filteredRows) {
                 DataContext context = createSecuritiesDataContext(trxRow, statementRow);
+                transitionToProcessing(dao, EntityType.SECU_TRX, context.getTransactionId());
                 contexts.add(context);
             }
 
         } catch (Exception e) {
             LogUtil.error(CLASS_NAME, e, "Error fetching securities transactions");
         }
-        
+
         return contexts;
     }
     
@@ -200,8 +220,9 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
         // Set statement context - use configured field names
         String bankField = DomainConstants.FIELD_BANK;
         context.setStatementBank(statementRow.getProperty(bankField));
+        context.setStatementDate(statementRow.getProperty("from_date"));
         context.setAccountType(DomainConstants.SOURCE_TYPE_BANK);
-        
+
         // Extract bank transaction fields - use configured field mappings
         String currencyField = DomainConstants.FIELD_CURRENCY;
         String amountField = DomainConstants.FIELD_PAYMENT_AMOUNT;
@@ -216,11 +237,14 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
         context.setCurrency(trxRow.getProperty(currencyField));
         context.setAmount(trxRow.getProperty(amountField));
         context.setTransactionDate(trxRow.getProperty(dateField));
+        context.setPaymentDate(trxRow.getProperty(dateField));
+        context.setPaymentAmount(trxRow.getProperty(amountField));
         context.setDebitCredit(trxRow.getProperty(dcField));
         context.setOtherSideBic(trxRow.getProperty(bicField));
         context.setOtherSideName(trxRow.getProperty(nameField));
         context.setPaymentDescription(trxRow.getProperty(descField));
         context.setReferenceNumber(trxRow.getProperty(refField));
+        context.setOtherSideAccount(trxRow.getProperty(DomainConstants.FIELD_OTHER_SIDE_ACCOUNT));
         String customerId = trxRow.getProperty(customerField);
         context.setCustomerId(customerId);
 
@@ -245,11 +269,12 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
         // Set statement context - use configured field names
         String bankField = DomainConstants.FIELD_BANK;
         context.setStatementBank(statementRow.getProperty(bankField));
+        context.setStatementDate(statementRow.getProperty("from_date"));
         context.setAccountType(DomainConstants.SOURCE_TYPE_SECU);
-        
+
         // Extract securities transaction fields - use configured field mappings
         String currencyField = DomainConstants.FIELD_CURRENCY;
-        String amountField = DomainConstants.FIELD_TOTAL_AMOUNT;
+        String amountField = DomainConstants.FIELD_AMOUNT;
         String dateField = DomainConstants.FIELD_TRANSACTION_DATE;
         String typeField = DomainConstants.FIELD_TYPE;
         String tickerField = DomainConstants.FIELD_TICKER;
@@ -262,6 +287,7 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
         
         context.setCurrency(trxRow.getProperty(currencyField));
         context.setAmount(trxRow.getProperty(amountField));
+        context.setTotalAmount(trxRow.getProperty(DomainConstants.FIELD_TOTAL_AMOUNT));
         context.setTransactionDate(trxRow.getProperty(dateField));
         context.setType(trxRow.getProperty(typeField));
         context.setTicker(trxRow.getProperty(tickerField));
@@ -292,26 +318,20 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
     }
     
     /**
-     * Mark statement as processing when we start loading its transactions
+     * Transition a transaction to PROCESSING status via StatusManager
      */
-    private void markStatementAsProcessing(FormRow statementRow, FormDataDao dao) {
+    private void transitionToProcessing(FormDataDao dao, EntityType entityType, String transactionId) {
+        if (statusManager == null) {
+            return;
+        }
         try {
-            String statementId = statementRow.getId();
-            LogUtil.info(CLASS_NAME, "Marking statement " + statementId + " as processing");
-            
-            // Update status to processing
-            statementRow.setProperty(FrameworkConstants.FIELD_STATUS, "processing");
-            statementRow.setProperty("processing_started", new Date().toString());
-            
-            // Save the update
-            FormRowSet rowSet = new FormRowSet();
-            rowSet.add(statementRow);
-            dao.saveOrUpdate(null, DomainConstants.TABLE_BANK_STATEMENT, rowSet);
-            
-            LogUtil.info(CLASS_NAME, "Statement " + statementId + " marked as processing");
+            statusManager.transition(dao, entityType, transactionId,
+                    Status.PROCESSING, "rows-enrichment", "Pipeline processing started");
+            LogUtil.info(CLASS_NAME, "Transaction " + transactionId + " transitioned to PROCESSING");
+        } catch (InvalidTransitionException e) {
+            LogUtil.error(CLASS_NAME, e, "Invalid status transition for transaction: " + transactionId);
         } catch (Exception e) {
-            LogUtil.error(CLASS_NAME, e, "Error marking statement as processing: " + statementRow.getId());
-            // Continue processing even if status update fails
+            LogUtil.error(CLASS_NAME, e, "Error transitioning transaction to PROCESSING: " + transactionId);
         }
     }
 }

@@ -1,11 +1,13 @@
 package com.fiscaladmin.gam.enrichrows.framework;
 
+import com.fiscaladmin.gam.framework.status.StatusManager;
 import org.joget.apps.form.dao.FormDataDao;
 import org.joget.commons.util.LogUtil;
 
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
 public class DataPipeline {
 
@@ -14,6 +16,7 @@ public class DataPipeline {
     private final List<DataStep> steps;
     private final FormDataDao formDataDao;
     private boolean stopOnError;
+    private StatusManager statusManager;
 
     public DataPipeline(FormDataDao formDataDao) {
         this.formDataDao = formDataDao;
@@ -22,9 +25,25 @@ public class DataPipeline {
     }
 
     /**
+     * Set StatusManager on all steps in the pipeline
+     */
+    public DataPipeline setStatusManager(StatusManager statusManager) {
+        this.statusManager = statusManager;
+        for (DataStep step : steps) {
+            if (step instanceof AbstractDataStep) {
+                ((AbstractDataStep) step).setStatusManager(statusManager);
+            }
+        }
+        return this;
+    }
+
+    /**
      * Add a step to the processing pipeline
      */
     public DataPipeline addStep(DataStep step) {
+        if (statusManager != null && step instanceof AbstractDataStep) {
+            ((AbstractDataStep) step).setStatusManager(statusManager);
+        }
         steps.add(step);
         return this;  // Fluent interface
     }
@@ -34,6 +53,16 @@ public class DataPipeline {
      */
     public DataPipeline setStopOnError(boolean stopOnError) {
         this.stopOnError = stopOnError;
+        return this;
+    }
+
+    /**
+     * Set properties on all steps in the pipeline
+     */
+    public DataPipeline setProperties(Map<String, Object> properties) {
+        for (DataStep step : steps) {
+            step.setProperties(properties);
+        }
         return this;
     }
 
@@ -107,7 +136,11 @@ public class DataPipeline {
         int successCount = 0;
         int failureCount = 0;
 
-        for (DataContext context : contexts) {
+        for (int i = 0; i < contexts.size(); i++) {
+            DataContext context = contexts.get(i);
+            for (DataStep step : steps) {
+                step.setBatchContext(i, contexts.size());
+            }
             PipelineResult result = execute(context);
             batchResult.addResult(result);
 

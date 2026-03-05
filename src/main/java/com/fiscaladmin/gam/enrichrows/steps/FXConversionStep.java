@@ -5,6 +5,8 @@ import com.fiscaladmin.gam.enrichrows.constants.FrameworkConstants;
 import com.fiscaladmin.gam.enrichrows.framework.AbstractDataStep;
 import com.fiscaladmin.gam.enrichrows.framework.StepResult;
 import com.fiscaladmin.gam.enrichrows.framework.DataContext;
+import com.fiscaladmin.gam.framework.status.EntityType;
+import com.fiscaladmin.gam.framework.status.Status;
 import org.joget.apps.form.dao.FormDataDao;
 import org.joget.apps.form.model.FormRow;
 import org.joget.apps.form.model.FormRowSet;
@@ -33,14 +35,14 @@ public class FXConversionStep extends AbstractDataStep {
 
     private static final String CLASS_NAME = FXConversionStep.class.getName();
 
-    // Table name for FX rates - updated to match your form
-    private static final String TABLE_FX_RATES = "fx_rates_eur";
+    // Table name for FX rates
+    private static final String TABLE_FX_RATES = DomainConstants.TABLE_FX_RATES_EUR;
 
-    // Base currency constant - now using from Constants
-    private static final String BASE_CURRENCY = DomainConstants.BASE_CURRENCY;
+    // Cached base currency value (read from config at start of performStep)
+    private String baseCurrency;
 
-    // Maximum age for FX rates (in days)
-    private static final int MAX_RATE_AGE_DAYS = 5;
+    // Default maximum age for FX rates (in days), can be overridden by properties
+    private static final int DEFAULT_MAX_RATE_AGE_DAYS = 5;
 
     // Date format for FX rate lookups
     private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd");
@@ -53,9 +55,38 @@ public class FXConversionStep extends AbstractDataStep {
         return "FX Conversion";
     }
 
+    /**
+     * Get the maximum FX rate age from properties, falling back to default.
+     */
+    private int getMaxRateAgeDays() {
+        Object value = getProperty("maxFxRateAgeDays", DEFAULT_MAX_RATE_AGE_DAYS);
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        try {
+            return Integer.parseInt(value.toString());
+        } catch (NumberFormatException e) {
+            return DEFAULT_MAX_RATE_AGE_DAYS;
+        }
+    }
+
+    /**
+     * Get the base currency from properties, falling back to DomainConstants.BASE_CURRENCY.
+     */
+    private String getBaseCurrency() {
+        if (baseCurrency == null) {
+            Object value = getProperty("baseCurrency", DomainConstants.BASE_CURRENCY);
+            baseCurrency = value != null ? value.toString() : DomainConstants.BASE_CURRENCY;
+        }
+        return baseCurrency;
+    }
+
     @Override
     protected StepResult performStep(DataContext context, FormDataDao formDataDao) {
         try {
+            // Cache base currency from config at start of step
+            String BASE_CURRENCY = getBaseCurrency();
+
             LogUtil.info(CLASS_NAME,
                     "Starting FX conversion for transaction: " + context.getTransactionId());
 
@@ -67,7 +98,7 @@ public class FXConversionStep extends AbstractDataStep {
                         "No currency specified for transaction: " + context.getTransactionId());
 
                 createFXException(context, formDataDao,
-                        "MISSING_CURRENCY",
+                        DomainConstants.EXCEPTION_MISSING_CURRENCY,
                         "Currency not specified for transaction",
                         "high");
 
@@ -96,7 +127,7 @@ public class FXConversionStep extends AbstractDataStep {
                         "Could not determine FX date for transaction: " + context.getTransactionId());
 
                 createFXException(context, formDataDao,
-                        "INVALID_FX_DATE",
+                        DomainConstants.EXCEPTION_INVALID_FX_DATE,
                         "Could not determine appropriate date for FX rate lookup",
                         "high");
 
@@ -118,7 +149,7 @@ public class FXConversionStep extends AbstractDataStep {
             }
 
             // Check if we found a valid rate
-            if (rateInfo != null && rateInfo.isValid()) {
+            if (rateInfo != null && rateInfo.isValid(getMaxRateAgeDays())) {
                 // Calculate base currency amount
                 double originalAmount = parseAmount(context.getAmount());
                 double baseAmount = originalAmount * rateInfo.getRate();
@@ -138,7 +169,7 @@ public class FXConversionStep extends AbstractDataStep {
                 // Check if rate is old and create warning
                 if (rateInfo.getAgeDays() > 0) {
                     createFXException(context, formDataDao,
-                            "OLD_FX_RATE",
+                            DomainConstants.EXCEPTION_OLD_FX_RATE,
                             String.format("Using FX rate from %s (%d days old)",
                                     rateInfo.getRateDate(), rateInfo.getAgeDays()),
                             "low");
@@ -161,12 +192,12 @@ public class FXConversionStep extends AbstractDataStep {
                 // No valid rate found - create exception
                 LogUtil.error(CLASS_NAME, null,
                         String.format("No valid FX rate for %s to EUR within %d days of %s",
-                                currency, MAX_RATE_AGE_DAYS, fxDate));
+                                currency, getMaxRateAgeDays(), fxDate));
 
                 createFXException(context, formDataDao,
                         DomainConstants.EXCEPTION_FX_RATE_MISSING,
                         String.format("No FX rate available for %s to EUR on %s (max age: %d days)",
-                                currency, fxDate, MAX_RATE_AGE_DAYS),
+                                currency, fxDate, getMaxRateAgeDays()),
                         "high");
 
                 // Set a placeholder base amount to allow processing to continue
@@ -182,7 +213,7 @@ public class FXConversionStep extends AbstractDataStep {
                     "Unexpected error in FX conversion for transaction: " + context.getTransactionId());
 
             createFXException(context, formDataDao,
-                    "FX_CONVERSION_ERROR",
+                    DomainConstants.EXCEPTION_FX_CONVERSION_ERROR,
                     "Error during FX conversion: " + e.getMessage(),
                     "high");
 
@@ -254,11 +285,11 @@ public class FXConversionStep extends AbstractDataStep {
             String targetCurrency;
             boolean needInverse = false;
 
-            if (BASE_CURRENCY.equals(toCurrency)) {
+            if (getBaseCurrency().equals(toCurrency)) {
                 // Looking for XXX to EUR rate
                 targetCurrency = fromCurrency;
                 needInverse = false;
-            } else if (BASE_CURRENCY.equals(fromCurrency)) {
+            } else if (getBaseCurrency().equals(fromCurrency)) {
                 // Looking for EUR to XXX rate
                 targetCurrency = toCurrency;
                 needInverse = true;
@@ -351,10 +382,10 @@ public class FXConversionStep extends AbstractDataStep {
             String targetCurrency;
             boolean needInverse = false;
 
-            if (BASE_CURRENCY.equals(toCurrency)) {
+            if (getBaseCurrency().equals(toCurrency)) {
                 targetCurrency = fromCurrency;
                 needInverse = false;
-            } else if (BASE_CURRENCY.equals(fromCurrency)) {
+            } else if (getBaseCurrency().equals(fromCurrency)) {
                 targetCurrency = toCurrency;
                 needInverse = true;
             } else {
@@ -365,7 +396,7 @@ public class FXConversionStep extends AbstractDataStep {
 
             LogUtil.info(CLASS_NAME,
                     String.format("Searching for recent FX rate for %s against EUR within %d days of %s",
-                            targetCurrency, MAX_RATE_AGE_DAYS, targetDate));
+                            targetCurrency, getMaxRateAgeDays(), targetDate));
 
             Date target = DATE_FORMAT.parse(targetDate);
             FXRateInfo bestRate = null;
@@ -406,7 +437,7 @@ public class FXConversionStep extends AbstractDataStep {
                                 int ageDays = (int) (diffMs / (1000 * 60 * 60 * 24));
 
                                 // Check if within acceptable age
-                                if (ageDays <= MAX_RATE_AGE_DAYS && ageDays < bestAgeDays) {
+                                if (ageDays <= getMaxRateAgeDays() && ageDays < bestAgeDays) {
                                     String exchangeRateStr = row.getProperty("exchangeRate");
                                     if (exchangeRateStr == null || exchangeRateStr.isEmpty()) {
                                         exchangeRateStr = row.getProperty("midRate");
@@ -510,7 +541,7 @@ public class FXConversionStep extends AbstractDataStep {
         additionalData.put("original_amount", originalAmount);
         additionalData.put("original_currency", originalCurrency);
         additionalData.put("base_amount", baseAmount);
-        additionalData.put("base_currency", BASE_CURRENCY);
+        additionalData.put("base_currency", getBaseCurrency());
         additionalData.put("fx_rate", fxRate);
         additionalData.put("fx_rate_date", rateDate);
         additionalData.put("fx_rate_source", rateSource);
@@ -530,7 +561,7 @@ public class FXConversionStep extends AbstractDataStep {
             }
 
             // Calculate total amount in base currency
-            String totalAmountStr = context.getAmount();
+            String totalAmountStr = context.getTotalAmount();
             if (totalAmountStr != null && !totalAmountStr.isEmpty()) {
                 try {
                     double totalAmount = parseAmount(totalAmountStr);
@@ -547,7 +578,7 @@ public class FXConversionStep extends AbstractDataStep {
 
         LogUtil.info(CLASS_NAME,
                 String.format("Context updated with base amount: %s %s = %s %s (Rate: %f)",
-                        originalAmount, originalCurrency, baseAmount, BASE_CURRENCY, fxRate));
+                        originalAmount, originalCurrency, baseAmount, getBaseCurrency(), fxRate));
     }
 
     /**
@@ -582,7 +613,7 @@ public class FXConversionStep extends AbstractDataStep {
             exceptionRow.setProperty("priority", priority);
 
             // Set status
-            exceptionRow.setProperty("status", FrameworkConstants.STATUS_PENDING);
+            exceptionRow.setProperty("status", Status.OPEN.getCode());
 
             // Additional FX context
             String internalType = getInternalTypeFromContext(context);
@@ -606,6 +637,15 @@ public class FXConversionStep extends AbstractDataStep {
             FormRowSet rowSet = new FormRowSet();
             rowSet.add(exceptionRow);
             formDataDao.saveOrUpdate(null, DomainConstants.TABLE_EXCEPTION_QUEUE, rowSet);
+
+            if (statusManager != null) {
+                try {
+                    statusManager.transition(formDataDao, EntityType.EXCEPTION, exceptionId,
+                            Status.OPEN, "rows-enrichment", exceptionDetails);
+                } catch (Exception e) {
+                    LogUtil.warn(CLASS_NAME, "Could not transition exception status: " + e.getMessage());
+                }
+            }
 
             LogUtil.info(CLASS_NAME,
                     String.format("Created FX exception for transaction %s: Type=%s, Priority=%s",
@@ -651,8 +691,8 @@ public class FXConversionStep extends AbstractDataStep {
         public String getRateType() { return rateType; }
         public int getAgeDays() { return ageDays; }
 
-        public boolean isValid() {
-            return rate > 0 && ageDays <= MAX_RATE_AGE_DAYS;
+        public boolean isValid(int maxRateAgeDays) {
+            return rate > 0 && ageDays <= maxRateAgeDays;
         }
     }
 }

@@ -53,6 +53,7 @@ public class DataContext {
 
     // Statement context
     private String statementBank;
+    private String statementDate;
     private String accountType;
 
     // Processing metadata
@@ -283,6 +284,14 @@ public class DataContext {
 
     public void setStatementBank(String statementBank) {
         this.statementBank = statementBank;
+    }
+
+    public String getStatementDate() {
+        return statementDate;
+    }
+
+    public void setStatementDate(String statementDate) {
+        this.statementDate = statementDate;
     }
 
     public String getAccountType() {

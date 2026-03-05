@@ -1,18 +1,20 @@
 # rows-enrichment Plugin — Detailed Specification
 
-**Version:** 2.0 (aligned with F01.05 v2)
-**Date:** 2 March 2026
+**Version:** 3.0 (significantly updated for metadata form consistency)
+**Date:** 3 March 2026
 **Status:** SPECIFICATION ONLY — no implementation
 
 ---
 
 ## 1. Purpose
 
-The rows-enrichment plugin transforms raw imported statement transactions (F01.03 bank rows, F01.04 securities rows) into fully enriched records stored in F01.05 (trxEnrichment). Each enrichment record contains resolved entity references (customer, counterparty, asset), validated and converted currency amounts, and a classified internal transaction type — everything the downstream gl-preparator plugin needs to construct GL postings.
+The rows-enrichment plugin transforms raw imported statement transactions (F01.03 bank rows, F01.04 securities rows) into fully enriched records stored in F01.05 (trxEnrichment). Each enrichment record contains resolved entity references (customer, counterparty, asset), validated and converted currency amounts, and a classified internal transaction type — everything the downstream gl-preparator plugin needs to construct GL postings. This specification is entirely configurable: transaction types come from F10.10, counterparty matching rules from F02.14, GL patterns from F02.15, and FX rates from the fx_rates_eur table.
+
+---
 
 ## 2. Scope
 
-This specification covers the complete plugin: data loading, a 6-step processing pipeline (was 5, adding AssetResolutionStep), data persistence, error handling, audit logging, and configuration. It is aligned with the reorganised F01.05 form definition and the MDM design document v3.0.
+This specification covers the complete plugin: data loading, a 6-step processing pipeline, data persistence, error handling, audit logging, and configuration. It is aligned with the reorganised F01.05 form definition, the MDM design document v3.0, and the metadata forms F10.10, F02.14, and F02.15.
 
 ### 2.1 gam-framework Dependency
 
@@ -82,7 +84,179 @@ The rows-enrichment plugin **must** depend on `gam-framework` (com.fiscaladmin.g
 
 ---
 
-## 3. Data Flow Overview
+## 3. Metadata Forms — Source of Truth for Configurable Data
+
+This specification is fundamentally built on metadata forms that serve as the source of truth for transaction types, matching rules, and GL patterns. No constants are hardcoded in the plugin; all behavior is driven by these configurable forms.
+
+### 3.1 F10.10 — Transaction Type Master (trxType)
+
+**Purpose:** Define the 8 base transaction types that all imported transactions must be classified into.
+
+**Location:** /sessions/dazzling-amazing-clarke/mnt/rsr/gam-acc-spec/f10.10-trxType.csv
+
+**Key fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `Code` | Text | Internal type code (e.g. BOND_BUY, SEC_SELL) |
+| `Name` | Text | Human-readable type name |
+| `Statement Type` | SelectBox | "Bank" or "Securities" |
+| `Asset Type` | SelectBox | Asset category if applicable (empty for bank transactions) |
+| `Flow Type` | SelectBox | "In" (debit/income), "Out" (credit/expense), or "None" (neutral) |
+
+**Current 8 types:**
+
+1. `BOND_BUY` — Bond Purchase (Securities, Out)
+2. `BOND_INTEREST` — Bond Interest (Bank, In)
+3. `CASH_IN_OUT` — Cash Transfer (Bank, In)
+4. `COMM_FEE` — Trading Commission (Bank, Out)
+5. `DIV_INCOME` — Dividend Income (Bank, In)
+6. `SEC_BUY` — Equity Purchase (Securities, Out)
+7. `SEC_SELL` — Equity Sale (Securities, In)
+8. And one additional type not listed in the CSV header (placeholder for future expansion)
+
+**Plugin integration:** The plugin loads ALL rows from this table at startup and caches them. The 8 types are the definitive list of "base" transaction types. Additional internal types (BANK_TRANS, TECH_BUY, CUST_INT, etc.) are defined in F02.14/F02.15 and may overlap with F10.10 or extend beyond it.
+
+### 3.2 F02.14 — Counterparty-Scoped Transaction Mapping (cpTxnMappingForm)
+
+**Purpose:** 40 configurable rules that match source transaction attributes (description, type, ticker, BIC, etc.) to internal transaction types based on counterparty.
+
+**Location:** /sessions/dazzling-amazing-clarke/mnt/rsr/gam-acc-spec/f02.14-cpTxnMappingForm.csv
+
+**Key fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `Mapping ID` | Text | Unique rule identifier (e.g. TXMP-000011) |
+| `Mapping Name` | Text | Human-readable rule name (e.g. "Asset Return") |
+| `Counterparty` | SelectBox/Text | Counterparty business ID OR "SYSTEM" for universal fallback |
+| `Matching Field` | SelectBox | Which source field to match: `type`, `d_c`, `description`, `reference`, `other_side_name`, `other_side_bic`, `ticker`, `combined` |
+| `Match Value` | Text | The value to match against (e.g. "Return of assets", "HLMBK", "võlakiri") |
+| `Internal Type` | SelectBox | Target internal type code (e.g. ASSET_RETURN, BANK_BOND, BOND_BUY) |
+
+**40 Current Rules (sample):**
+
+| Mapping ID | Counterparty | Matching Field | Match Value | Internal Type |
+|---|---|---|---|---|
+| TXMP-000001 | LHV-EE | description | intress | INT_INCOME |
+| TXMP-000002 | LHV-EE | description | laenuleping | INT_EXPENSE |
+| TXMP-000003 | LHV-EE | description | Securities buy | SEC_BUY |
+| TXMP-000004 | LHV-EE | description | Securities sell | SEC_SELL |
+| TXMP-000005 | LHV-EE | description | Securities commission fee | COMM_FEE |
+| TXMP-000006 | LHV-EE | description | Dividends | DIV_INCOME |
+| TXMP-000007 | LHV-EE | description | Account interest | INT_INCOME |
+| TXMP-000008 | SYSTEM | description | halduslepingule | MGMT_FEE |
+| TXMP-000009 | SYSTEM | description | laenu tagasimakse | LOAN_PAYMENT |
+| TXMP-000010 | SYSTEM | description | investment | INV_INCOME |
+| TXMP-000011 | SYSTEM | description | Return of assets | ASSET_RETURN |
+| TXMP-000012 | SYSTEM | description | Interest payment | INT_EXPENSE |
+| TXMP-000013 | SYSTEM | d_c | C | CASH_IN |
+| TXMP-000014 | SYSTEM | d_c | D | CASH_OUT |
+| TXMP-000015 | IBKR | type | ost | EQ_BUY |
+| TXMP-000016 | IBKR | type | müük | EQ_SELL |
+| TXMP-000017 | IBKR | description | võlakiri | BOND_BUY |
+| TXMP-000018 | IBKR | type | dividend | DIV_INCOME |
+| TXMP-000019 | IBKR | type | split+ | SPLIT_IN |
+| TXMP-000020 | IBKR | type | split- | SPLIT_OUT |
+| TXMP-000021 | SAXO | type | deposit | SEC_DEPOSIT |
+| TXMP-000022 | SAXO | type | withdrawal | SEC_WITHDRAW |
+| TXMP-000023 | SYSTEM | description | allutatud võlakiri | BOND_INT |
+| TXMP-000024 | SYSTEM | ticker | MSFT | TECH_BUY |
+| TXMP-000025 | SYSTEM | ticker | ADBE | TECH_BUY |
+| TXMP-000026 | SYSTEM | ticker | MU | TECH_BUY |
+| TXMP-000027 | SYSTEM | ticker | NEM | COMM_BUY |
+| TXMP-000028 | SYSTEM | ticker | CRWD | TECH_BUY |
+| TXMP-000029 | SYSTEM | ticker | BIGB | LOCAL_BOND |
+| TXMP-000030 | SYSTEM | ticker | HLMBK | BANK_BOND |
+| TXMP-000031 | SWED | other_side_name | GENESIS | INT_INCOME |
+| TXMP-000032 | SEB | description | Securities | SEC_TRANS |
+| TXMP-000033 | COOP | other_side_bic | EKRDEE | BANK_TRANS |
+| TXMP-000034 | LUMINOR | description | investment | INV_TRANS |
+| TXMP-000035 | SYSTEM | reference | ID-000001 | CUST_INT |
+| TXMP-000036 | LHV-EE | type | BUY | EQ_BUY |
+| TXMP-000037 | LHV-EE | type | SELL | EQ_SELL |
+| TXMP-000038 | LHV-EE | type | SPLIT_IN | SPLIT_IN |
+| TXMP-000039 | LHV-EE | type | SPLIT_OUT | SPLIT_OUT |
+| TXMP-000040 | (reserved for future) | — | — | — |
+
+**Rule matching logic (Section 7.5 below):**
+- Rules are evaluated in priority order (counterparty-specific first, then SYSTEM)
+- Each rule specifies a `matchingField` and `matchOperator` (equals, contains, startsWith, etc.)
+- First rule to match wins
+- If no rule matches, the transaction is marked UNMATCHED
+
+### 3.3 F02.15 — GL Posting Patterns by Internal Type (transactionTypeMapForm)
+
+**Purpose:** Map each internal transaction type to GL debit/credit posting patterns. 31 distinct internal types are defined (superset of F10.10's 8 base types).
+
+**Location:** /sessions/dazzling-amazing-clarke/mnt/rsr/gam-acc-spec/f02.15-transactionTypeMapForm.csv
+
+**Key fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `Mapping ID` | Text | Unique identifier |
+| `Internal Type` | SelectBox | Target internal type (e.g. INT_INCOME, SEC_BUY, TECH_BUY) |
+| `Description` | Text | Human-readable type description |
+| `GL Debit Pattern` | Text | GL posting template for debit side (e.g. `1101.{custId}.{currency}.{cpId}\|{amount}\|{currency}`) |
+| `GL Credit Pattern` | Text | GL posting template for credit side |
+
+**31 Current Internal Types (from f02.15):**
+
+1. INT_INCOME — Interest Income
+2. INT_EXPENSE — Interest Expense
+3. SEC_BUY — Securities Purchase
+4. SEC_SELL — Securities Sale
+5. COMM_FEE — Commission Fee
+6. DIV_INCOME — Dividend Income
+7. MGMT_FEE — Management Fee
+8. LOAN_PAYMENT — Loan Payment Received
+9. INV_INCOME — Investment Income
+10. ASSET_RETURN — Asset Return
+11. CASH_IN — Cash Inflow
+12. CASH_OUT — Cash Outflow
+13. EQ_BUY — Equity Purchase
+14. EQ_SELL — Equity Sale
+15. BOND_BUY — Bond Purchase
+16. BOND_INT — Bond Interest Income
+17. SPLIT_IN — Stock Split Increase
+18. SPLIT_OUT — Stock Split Decrease
+19. SEC_DEPOSIT — Securities Deposit
+20. SEC_WITHDRAW — Securities Withdrawal
+21. TECH_BUY — Technology Stock Purchase
+22. COMM_BUY — Commodity Stock Purchase
+23. LOCAL_BOND — Local Bond Purchase
+24. BANK_BOND — Bank Bond Purchase
+25. SEC_TRANS — Securities Transaction Generic
+26. BANK_TRANS — Bank Transfer
+27. INV_TRANS — Investment Transaction
+28. CUST_INT — Customer Interest
+29. FX_CONV — Foreign Exchange Conversion
+30. CUSTODY_FEE — Custody Fee
+31. *(reserved)* — (for future use)
+
+**GL Pattern Format:**
+- Debit Pattern: e.g. `1101.{custId}.{currency}.{cpId}|{amount}|{currency}`
+- Credit Pattern: e.g. `3103.{custId}|{amount}|{currency}`
+- Placeholders: `{custId}`, `{assetId}`, `{cpId}`, `{amount}`, `{fee}`, `{currency}`
+- The gl-preparator plugin expands these patterns when creating GL posting lines
+
+**Plugin integration:** The rows-enrichment plugin does NOT perform GL posting — that is the gl-preparator's job. However, the enrichment plugin must ensure that all fields required for GL posting are populated (customer_id, counterparty_id, asset_id for securities, amounts, currency, internal_type). The F02.15 patterns are informational for the enrichment team to understand what fields are needed downstream.
+
+### 3.4 Settlement Days Configuration (Future Extension Point)
+
+**Current:** The plugin uses a global `settlementConvention` property (default "T+2") to compute settlement_date from transaction_date.
+
+**Future enhancement:** F02.15 could be extended with a `settlementDays` field per internal type, allowing settlement periods to vary by transaction type. For now, a single global value applies to all transactions. The architecture is designed to support per-type settlement periods without changing the pipeline interface — only the settlement date computation method in EnrichmentDataPersister would need updating.
+
+**Placeholder note:** If F02.15 is extended with settlementDays in a future release, the persister must:
+1. Load the `settlementDays` value from the F02.15 row matching the transaction's internal_type
+2. If not found, fall back to the plugin property `settlementConvention`
+3. Compute settlement_date by adding N business days to transaction_date, skipping weekends
+
+---
+
+## 4. Data Flow Overview
 
 ```
 F01.00 (statement, Status.CONSOLIDATED)     -- input: statements already imported & consolidated
@@ -100,8 +274,8 @@ DataPipeline (6 steps, sequential per transaction)
   |  Step 1: CurrencyValidationStep
   |  Step 2: CounterpartyDeterminationStep
   |  Step 3: CustomerIdentificationStep
-  |  Step 4: AssetResolutionStep           <-- NEW
-  |  Step 5: F14RuleMappingStep
+  |  Step 4: AssetResolutionStep
+  |  Step 5: F14RuleMappingStep (uses F02.14 rules + internal types from F02.15)
   |  Step 6: FXConversionStep
   |
   v
@@ -111,10 +285,13 @@ EnrichmentDataPersister
   |  StatusManager: BANK_TRX/SECU_TRX PROCESSING → ENRICHED|MANUAL_REVIEW|ERROR
   |  StatusManager: STATEMENT CONSOLIDATED → ENRICHED|ERROR (after all transactions)
   v
-F01.05 (trxEnrichment)
+F01.05 (trxEnrichment) — 52 fields per Section 8.4
+  |
+  v (downstream, outside this plugin's scope)
+gl-preparator plugin consumes F01.05, expands GL patterns from F02.15, creates posting lines
 ```
 
-### 3.1 Pipeline Ordering Rationale
+### 4.1 Pipeline Ordering Rationale
 
 | Step | Why This Position |
 |------|-------------------|
@@ -127,9 +304,9 @@ F01.05 (trxEnrichment)
 
 ---
 
-## 4. Table & Form Dependencies
+## 5. Table & Form Dependencies
 
-### 4.1 Source Tables (READ)
+### 5.1 Source Tables (READ)
 
 | Table Name (Joget) | Form | Description |
 |---|---|---|
@@ -137,7 +314,7 @@ F01.05 (trxEnrichment)
 | `bank_total_trx` | F01.03 | Bank transaction rows: payment_date, payment_amount, currency, d_c, other_side_bic, other_side_name, payment_description, reference_number, customer_id, status |
 | `secu_total_trx` | F01.04 | Securities transaction rows: transaction_date, type, ticker, description, quantity, price, currency, amount, fee, total_amount, reference, status |
 
-### 4.2 MDM Tables (READ)
+### 5.2 MDM Tables (READ)
 
 | Table Name (Joget) | Form | Queried By |
 |---|---|---|
@@ -147,11 +324,18 @@ F01.05 (trxEnrichment)
 | `bank` | F10.02 | swift_code_bic; returns name |
 | `broker` | F10.03 | id, swift_code_bic; returns bic_code |
 | `customer_account` | F02.01 | account_number; returns customer_id |
-| `cp_txn_mapping` | F14 rules | counterpartyId, sourceType; returns matchingField, matchOperator, matchValue, internalType, priority |
-| `fx_rates_eur` | FX rates | targetCurrency, effectiveDate; returns exchangeRate, midRate, importSource, rateType |
 | `asset_master` | F02.02 (assetMasterForm) | ticker; returns assetId, isin, categoryCode, asset_class, tradingCurrency. Key fields: assetId (IdGenerator), ticker, isin, cusip, sedol, assetName, shortName, categoryCode (SelectBox→asset category MDM), asset_class (SelectBox→asset class MDM), tradingCurrency (SelectBox→currency MDM), tradingStatus, riskCategory, liquidityProfile |
+| `fx_rates_eur` | FX rates | targetCurrency, effectiveDate; returns exchangeRate, midRate, importSource, rateType |
 
-### 4.3 Target Tables (WRITE)
+### 5.3 Metadata Forms (READ) — Source of Truth for Behavior
+
+| Table Name (Joget) | Form | Purpose | Fields Used |
+|---|---|---|---|
+| `trxType` | F10.10 | Base transaction types | Code, Name, Statement Type, Asset Type, Flow Type |
+| `cp_txn_mapping` | F02.14 | Counterparty-scoped matching rules | Mapping ID, Counterparty, Matching Field, Match Value, Internal Type |
+| `transactionTypeMap` | F02.15 | GL posting patterns & internal type definitions | Mapping ID, Internal Type, GL Debit Pattern, GL Credit Pattern |
+
+### 5.4 Target Tables (WRITE)
 
 | Table Name (Joget) | Form | Description |
 |---|---|---|
@@ -163,11 +347,11 @@ F01.05 (trxEnrichment)
 
 ---
 
-## 5. DataContext Specification
+## 6. DataContext Specification
 
 DataContext is the data carrier passed through all pipeline steps. Each source transaction becomes one DataContext instance.
 
-### 5.1 Core Fields (set by TransactionDataLoader)
+### 6.1 Core Fields (set by TransactionDataLoader)
 
 | Field | Type | Set From | Description |
 |---|---|---|---|
@@ -187,7 +371,7 @@ DataContext is the data carrier passed through all pipeline steps. Each source t
 | `errorMessage` | String | — | Error details if any step fails |
 | `processedSteps` | List | — | Ordered list of completed step names |
 
-### 5.2 Bank-Specific Fields (set by TransactionDataLoader, source_type=bank)
+### 6.2 Bank-Specific Fields (set by TransactionDataLoader, source_type=bank)
 
 | Field | Type | Set From (F01.03 field) |
 |---|---|---|
@@ -200,7 +384,7 @@ DataContext is the data carrier passed through all pipeline steps. Each source t
 | `paymentDescription` | String | `payment_description` |
 | `referenceNumber` | String | `reference_number` |
 
-### 5.3 Securities-Specific Fields (set by TransactionDataLoader, source_type=secu)
+### 6.3 Securities-Specific Fields (set by TransactionDataLoader, source_type=secu)
 
 | Field | Type | Set From (F01.04 field) |
 |---|---|---|
@@ -213,7 +397,7 @@ DataContext is the data carrier passed through all pipeline steps. Each source t
 | `totalAmount` | String | `total_amount` |
 | `reference` | String | `reference` |
 
-### 5.4 AdditionalData Map (populated by pipeline steps)
+### 6.4 AdditionalData Map (populated by pipeline steps)
 
 The `additionalData` map accumulates step results. Each key is documented with the step that sets it.
 
@@ -240,7 +424,7 @@ The `additionalData` map accumulates step results. Each key is documented with t
 | `customer_type` | String | CustomerIdentification | "Individual" or "Corporate" |
 | `customer_currency` | String | CustomerIdentification | Customer base currency |
 | `customer_risk_level` | String | CustomerIdentification | Risk classification |
-| **Asset Resolution (Step 4) — NEW** |||
+| **Asset Resolution (Step 4) — for securities only** |||
 | `asset_id` | String | AssetResolution | Resolved asset master ID (F02.02 assetId) |
 | `asset_isin` | String | AssetResolution | ISIN code (F02.02 isin) |
 | `asset_category` | String | AssetResolution | Asset category code (F02.02 categoryCode) |
@@ -248,9 +432,9 @@ The `additionalData` map accumulates step results. Each key is documented with t
 | `asset_base_currency` | String | AssetResolution | Asset trading/denomination currency (F02.02 tradingCurrency) |
 | `currency_mismatch_flag` | String | AssetResolution | "yes" if transaction currency != tradingCurrency |
 | **F14 Rule Mapping (Step 5)** |||
-| `internal_type` | String | F14RuleMapping | Matched internal transaction type code |
-| `f14_rule_id` | String | F14RuleMapping | ID of the matched rule |
-| `f14_rule_name` | String | F14RuleMapping | Name of the matched rule |
+| `internal_type` | String | F14RuleMapping | Matched internal transaction type code (from F02.14/F02.15) |
+| `f14_rule_id` | String | F14RuleMapping | ID of the matched rule (e.g. TXMP-000011) |
+| `f14_rule_name` | String | F14RuleMapping | Name of the matched rule (e.g. "Asset Return") |
 | `f14_rules_evaluated` | Integer | F14RuleMapping | Number of rules evaluated |
 | **FX Conversion (Step 6)** |||
 | `original_amount` | String | FXConversion | Original transaction amount |
@@ -265,13 +449,13 @@ The `additionalData` map accumulates step results. Each key is documented with t
 
 ---
 
-## 6. TransactionDataLoader Specification
+## 7. TransactionDataLoader Specification
 
-### 6.1 Responsibility
+### 7.1 Responsibility
 
 Load all unprocessed transactions from F01.03 and F01.04, grouped by their parent statement (F01.00).
 
-### 6.2 Processing Logic
+### 7.2 Processing Logic
 
 1. Query `bank_statement` table for all rows where `status = Status.CONSOLIDATED.getCode()` (statements ready for enrichment)
 2. For each unprocessed statement:
@@ -279,11 +463,11 @@ Load all unprocessed transactions from F01.03 and F01.04, grouped by their paren
    b. Based on `account_type`:
       - `"bank"` → load from `bank_total_trx` where `statement_id = <statementId>` and `status = Status.NEW.getCode()`
       - `"secu"` → load from `secu_total_trx` where `statement_id = <statementId>` and `status = Status.NEW.getCode()`
-3. Create one DataContext per transaction row (see Section 5)
+3. Create one DataContext per transaction row (see Section 6)
 4. Sort all contexts by transaction date ascending
 5. Return the complete list
 
-### 6.3 Bank DataContext Construction
+### 7.3 Bank DataContext Construction
 
 ```
 sourceType        = "bank"
@@ -302,7 +486,7 @@ paymentDescription= F01.03.payment_description
 referenceNumber   = F01.03.reference_number
 ```
 
-### 6.4 Securities DataContext Construction
+### 7.4 Securities DataContext Construction
 
 ```
 sourceType        = "secu"
@@ -325,9 +509,9 @@ reference         = F01.04.reference
 
 ---
 
-## 7. Pipeline Steps Specification
+## 8. Pipeline Steps Specification
 
-### 7.1 Step 1: CurrencyValidationStep
+### 8.1 Step 1: CurrencyValidationStep
 
 **Purpose:** Validate that the transaction currency exists and is active in the currency MDM.
 
@@ -352,7 +536,7 @@ reference         = F01.04.reference
 
 ---
 
-### 7.2 Step 2: CounterpartyDeterminationStep
+### 8.2 Step 2: CounterpartyDeterminationStep
 
 **Purpose:** Identify the counterparty for each transaction.
 
@@ -389,7 +573,7 @@ For **securities** transactions:
 
 ---
 
-### 7.3 Step 3: CustomerIdentificationStep
+### 8.3 Step 3: CustomerIdentificationStep
 
 **Purpose:** Identify the customer for both bank and securities transactions. Each transaction belongs to a bank customer whose portfolio or account is being operated on.
 
@@ -427,7 +611,7 @@ For **securities** transactions:
 
 ---
 
-### 7.4 Step 4: AssetResolutionStep — NEW
+### 8.4 Step 4: AssetResolutionStep
 
 **Purpose:** For securities transactions, resolve the ticker symbol to an asset master record and retrieve asset metadata.
 
@@ -476,29 +660,61 @@ For **securities** transactions:
 
 ---
 
-### 7.5 Step 5: F14RuleMappingStep
+### 8.5 Step 5: F14RuleMappingStep
 
-**Purpose:** Classify the transaction by matching it against configurable rules to determine the internal transaction type.
+**Purpose:** Classify the transaction by matching it against configurable F02.14 rules to determine the internal transaction type. All internal types come from the F02.15 transactionTypeMap table.
 
 **Execution condition:** Always (unless previous error).
 
 **Processing:**
-1. Get `counterparty_id` from additionalData (set by Step 2)
-2. Load applicable rules from `cp_txn_mapping` table where:
-   - `sourceType` matches context source type ("bank" or "secu")
-   - `counterpartyId` matches context counterparty OR equals "SYSTEM" (universal fallback)
-   - `status` is "Active" or "active"
-   - `effectiveDate` is null or <= today
-3. Sort rules: counterparty-specific first (by priority ASC), then SYSTEM rules (by priority ASC)
-4. Evaluate each rule against the transaction:
-   a. Get the `matchingField` value from context (payment_description, d_c, type, ticker, etc.)
-   b. Apply `matchOperator`: equals, contains, startsWith, endsWith, regex, in
-   c. Apply `caseSensitive` flag
-   d. If `matchingField = "combined"`: evaluate `complexRuleExpression` (AND/OR conditions)
-   e. If field match passes, check `arithmeticCondition` (e.g. amount > 100)
-5. First matching rule wins → extract `internalType`
-6. If no rules exist for counterparty: set UNMATCHED, create NO_F14_RULES exception
-7. If rules exist but none match: set UNMATCHED, create NO_RULE_MATCH exception
+
+1. **Load applicable rules from F02.14 (`cp_txn_mapping` table):**
+   - Query for all rows where `status` is "active"
+   - Filter by counterparty: include rows where `Counterparty = <counterparty_id from Step 2>` OR `Counterparty = "SYSTEM"`
+   - Filter by transaction type: include rows where source system type (bank/secu) matches
+   - Filter by effectiveDate: include rows where `effectiveDate` is null or <= today
+
+2. **Sort rules for evaluation:**
+   - **Priority 1:** Rules with matching counterparty_id (ordered by rule priority ASC)
+   - **Priority 2:** Rules with Counterparty = "SYSTEM" (ordered by rule priority ASC)
+   - This ensures counterparty-specific rules are evaluated before universal SYSTEM rules
+
+3. **Evaluate each rule in order against the transaction:**
+
+   For each rule, extract:
+   - `matchingField` — the source transaction field to match (type, d_c, description, reference, other_side_name, other_side_bic, ticker, combined)
+   - `matchOperator` — comparison method (equals, contains, startsWith, endsWith, regex, in, case_insensitive)
+   - `matchValue` — the pattern/value to match
+   - `arithmeticCondition` (optional) — numeric range, e.g. amount > 100
+   - `complexRuleExpression` (optional, if matchingField="combined") — AND/OR conditions on multiple fields
+
+   Matching logic:
+   ```
+   matchField = context.getField(rule.matchingField)
+
+   IF rule.matchingField == "combined":
+       # Evaluate complex expression (e.g. "description CONTAINS 'loan' AND amount > 1000")
+       matchPassed = evaluateExpression(rule.complexRuleExpression, context)
+   ELSE:
+       # Simple field match
+       matchPassed = applyOperator(matchField, rule.matchOperator, rule.matchValue, rule.caseSensitive)
+
+   IF matchPassed AND rule.arithmeticCondition:
+       # Also check numeric condition
+       matchPassed = evaluateArithmetic(rule.arithmeticCondition, context.amount)
+
+   IF matchPassed:
+       RETURN rule.internalType  # First match wins
+   ```
+
+4. **Determine matching confidence:**
+   - If a rule matched: confidence = "high"
+   - If no rule matched: confidence = "low", set `internal_type = "UNMATCHED"`
+
+5. **Handle no-match scenarios:**
+   - If no rules exist for the counterparty/source type: create exception NO_F14_RULES, set UNMATCHED
+   - If rules exist but none match: create exception NO_RULE_MATCH (include transaction details for manual rule creation), set UNMATCHED
+   - On UNMATCHED: store details in exception for downstream operations team to create new rule
 
 **Output (additionalData):** `internal_type`, `f14_rule_id`, `f14_rule_name`, `f14_rules_evaluated`
 
@@ -513,15 +729,18 @@ For **securities** transactions:
 - `NO_RULE_MATCH` — rules exist but none match (medium priority; includes transaction details for manual rule creation)
 - `F14_MAPPING_ERROR` — unexpected error
 
+**Important:** The internal_type codes come from the superset of F02.14 (40 rules) and F02.15 (31 internal types). The plugin must support all internal types defined in F02.15, even if F10.10 only lists 8 base types. The architecture is designed to be extensible: new internal types can be added to F02.15 and new matching rules to F02.14 without code changes.
+
 ---
 
-### 7.6 Step 6: FXConversionStep
+### 8.6 Step 6: FXConversionStep
 
 **Purpose:** Convert transaction amount to base currency (EUR).
 
 **Execution condition:** Always (unless previous error).
 
 **Processing:**
+
 1. Get validated currency from context
 2. If currency = EUR: set base_amount = original_amount, fx_rate = 1.0, fx_rate_source = "BASE_CURRENCY", done
 3. Determine FX rate date:
@@ -533,7 +752,7 @@ For **securities** transactions:
    b. Rate must have `status = "active"`
    c. The table stores rates as "1 EUR = X target currency"
    d. To convert target → EUR: rate = 1 / exchangeRate
-5. If exact date not found: search for most recent rate within 5 days (MAX_RATE_AGE_DAYS)
+5. If exact date not found: search for most recent rate within 5 days (MAX_RATE_AGE_DAYS, configurable)
 6. If rate found:
    a. Calculate: `baseAmount = originalAmount * rate`
    b. For securities: also convert fee and total_amount
@@ -555,25 +774,25 @@ For **securities** transactions:
 
 ---
 
-## 8. EnrichmentDataPersister Specification
+## 9. EnrichmentDataPersister Specification
 
-### 8.1 Responsibility
+### 9.1 Responsibility
 
 Transform the enriched DataContext into an F01.05 record, save it, update source transaction status, and create an audit trail.
 
-### 8.2 Target Table
+### 9.2 Target Table
 
 `trxEnrichment` (matching F01.05 form tableName)
 
-### 8.3 Record ID Format
+### 9.3 Record ID Format
 
 `TRX-<6-char-UUID-uppercase>` (e.g. TRX-A3BF12)
 
-### 8.4 Complete Field Mapping
+### 9.4 Complete 52-Field Mapping
 
 Each row below maps one F01.05 field to its source in DataContext.
 
-#### Provenance Section
+#### Provenance Section (10 fields)
 
 | F01.05 Field | Source | Logic |
 |---|---|---|
@@ -588,12 +807,12 @@ Each row below maps one F01.05 field to its source in DataContext.
 | `group_id` | — | Leave null. For manual grouping only |
 | `split_sequence` | — | Leave null. For manual split only |
 
-#### Transaction Core Section
+#### Transaction Core Section (8 fields)
 
 | F01.05 Field | Source | Logic |
 |---|---|---|
 | `transaction_date` | `context.getTransactionDate()` | Direct |
-| `settlement_date` | computed | Bank: same as transaction_date. Secu: transaction_date + N business days where N = plugin property `settlementConvention` (default "2", meaning T+2). Weekends and holidays are skipped. **Extensibility note:** designed as a single global value for now; if needed, can be extended later to a per-asset-class lookup table without changing the pipeline interface — only the settlement date computation method in the persister would need updating |
+| `settlement_date` | computed | Bank: same as transaction_date. Secu: transaction_date + N business days where N = plugin property `settlementConvention` (default "2", meaning T+2). Weekends and holidays are skipped. **Extensibility note:** designed as a single global value for now; if F02.15 is extended with a `settlementDays` field per internal type in a future release, settlement date computation can be extended to use that lookup without changing the pipeline interface — only the persister method would need updating. |
 | `debit_credit` | `context.getDebitCredit()` | Direct for bank (from F01.03 d_c). For secu: derived from transaction type via configurable mapping (see debit/credit derivation table below) |
 | `description` | Description Builder output | Assembled from configurable source field list (see Section 12.2). Bank default: payment_description, reference_number, other_side_name, other_side_bic, other_side_account. Secu default: description, reference, ticker, quantity, price |
 | `original_amount` | `context.getAmount()` | Direct |
@@ -617,7 +836,7 @@ The mapping from F01.04 `type` to F01.05 `debit_credit` reflects the cash impact
 | CORPORATE_ACTION | N | Neutral by default — varies by action, manual review recommended |
 | *(unmapped type)* | N | Default to neutral, create exception for manual review |
 
-#### Classification Section
+#### Classification Section (3 fields)
 
 | F01.05 Field | Source | Logic |
 |---|---|---|
@@ -625,7 +844,7 @@ The mapping from F01.04 `type` to F01.05 `debit_credit` reflects the cash impact
 | `type_confidence` | computed | Map from matching + customer confidence: if internal_type != UNMATCHED AND customer_confidence >= 80 → "high"; if >= 50 → "medium"; else → "low" |
 | `matched_rule_id` | `additionalData.f14_rule_id` | Direct. May be null if UNMATCHED |
 
-#### Customer Resolution Section
+#### Customer Resolution Section (4 fields)
 
 | F01.05 Field | Source | Logic |
 |---|---|---|
@@ -636,7 +855,7 @@ The mapping from F01.04 `type` to F01.05 `debit_credit` reflects the cash impact
 
 **Note:** For securities transactions, customer resolution runs the same as for bank transactions — the customer is the bank's client whose portfolio is being managed. If no customer can be resolved (rare — typically only internal/technical transactions), set resolved_customer_id = "UNKNOWN" and customer_match_method = "unresolved", and create a MISSING_CUSTOMER exception as for bank transactions.
 
-#### Asset Resolution Section
+#### Asset Resolution Section (6 fields, securities only)
 
 | F01.05 Field | Source | Logic |
 |---|---|---|
@@ -649,7 +868,7 @@ The mapping from F01.04 `type` to F01.05 `debit_credit` reflects the cash impact
 
 **Note:** For bank transactions, all asset fields are left null. F01.05's Asset Resolution section has `visibilityControl: source_tp`, `visibilityValue: secu` so these fields are hidden for bank records.
 
-#### Counterparty Resolution Section
+#### Counterparty Resolution Section (7 fields)
 
 | F01.05 Field | Source | Logic |
 |---|---|---|
@@ -678,7 +897,7 @@ elif "Broker":
     row.broker_short_code       = shortCode
 ```
 
-#### Currency & FX Section
+#### Currency & FX Section (5 fields)
 
 | F01.05 Field | Source | Logic |
 |---|---|---|
@@ -689,25 +908,26 @@ elif "Broker":
 | `fx_rate_date` | `additionalData.fx_rate_date` | Rate effective date |
 | `base_amount_eur` | `context.getBaseAmount()` | EUR equivalent |
 
-#### Fee & Pairing Section
+#### Fee & Pairing Section (4 fields)
 
 | F01.05 Field | Source | Logic |
 |---|---|---|
 | `has_fee` | computed | "yes" if fee_amount != null AND fee_amount > 0, else "no" |
 | `fee_trx_id` | — | Leave null. Populated by pairing logic downstream |
 | `pair_id` | — | Leave null. Populated by pairing logic downstream |
+| `base_fee_eur` | `additionalData.base_fee` | EUR fee (secu only) |
 
-#### Status & Notes Section
+#### Status & Notes Section (5 fields)
 
 | F01.05 Field | Source | Logic |
 |---|---|---|
-| `status` | computed | See Section 8.5 below |
+| `status` | computed | See Section 9.5 below |
 | `enrichment_timestamp` | `new Date()` | ISO timestamp: yyyy-MM-dd HH:mm:ss |
 | `error_message` | `context.getErrorMessage()` | Direct. May be null |
 | `processing_notes` | computed | Concatenated summary: "Steps completed: {processedSteps}. Customer: {customer_id} ({confidence}%). Counterparty: {counterparty_id} ({type}). Internal type: {internal_type}." |
 | `version` | "1" | Initial version |
 
-### 8.5 Status Determination & Transition Logic
+### 9.5 Status Determination & Transition Logic
 
 The `status` field uses `Status` enum values from gam-framework. All transitions go through `StatusManager`.
 
@@ -757,7 +977,7 @@ try {
 
 **Note:** Each `StatusManager.transition()` call automatically writes a `TransitionAuditEntry` to `audit_log`. No additional audit code is needed for status changes.
 
-### 8.6 Post-Persistence Actions
+### 9.6 Post-Persistence Actions
 
 After each enrichment record is saved:
 
@@ -777,9 +997,9 @@ After each enrichment record is saved:
 
 3. **Store enriched_record_id in context**: Set `additionalData.enriched_record_id = <new F01.05 row ID>` for downstream use.
 
-**Note:** The audit entry for "ENRICHMENT_SAVED" is automatically created by the StatusManager transition in Step 8.5. No manual audit write needed.
+**Note:** The audit entry for "ENRICHMENT_SAVED" is automatically created by the StatusManager transition in Step 9.5. No manual audit write needed.
 
-### 8.7 Batch Completion (per statement)
+### 9.7 Batch Completion (per statement)
 
 After all transactions for a statement are persisted:
 
@@ -802,11 +1022,11 @@ After all transactions for a statement are persisted:
 
 ---
 
-## 9. Exception Queue Specification
+## 10. Exception Queue Specification
 
 All exceptions are written to the `exception_queue` table.
 
-### 9.1 Exception Record Structure
+### 10.1 Exception Record Structure
 
 | Field | Description |
 |---|---|
@@ -826,7 +1046,7 @@ All exceptions are written to the `exception_queue` table.
 | `due_date` | Calculated: critical/high = +1 day, medium = +3 days, low = +7 days |
 | Additional context fields | Varies by exception type (payment_description, ticker, counterparty_id, etc.) |
 
-### 9.2 Exception Types
+### 10.2 Exception Types
 
 | Code | Step | Priority | Description |
 |---|---|---|---|
@@ -838,11 +1058,11 @@ All exceptions are written to the `exception_queue` table.
 | `LOW_CONFIDENCE_IDENTIFICATION` | CustomerIdentification | low | Confidence < 80% |
 | `MISSING_TICKER` | AssetResolution | medium | No ticker in secu transaction |
 | `UNKNOWN_ASSET` | AssetResolution | medium | Ticker not in asset master |
+| `INACTIVE_ASSET` | AssetResolution | low | Asset found but tradingStatus not active |
 | `NO_F14_RULES` | F14RuleMapping | high | No rules for counterparty/source |
 | `NO_RULE_MATCH` | F14RuleMapping | medium | Rules exist, none matched |
 | `FX_RATE_MISSING` | FXConversion | high | No rate within 5 days |
 | `OLD_FX_RATE` | FXConversion | low | Rate is older than exact date |
-| `INACTIVE_ASSET` | AssetResolution | low | Asset found but tradingStatus not active |
 | `INVALID_FX_DATE` | FXConversion | medium | Cannot determine rate lookup date |
 | `CURRENCY_VALIDATION_ERROR` | CurrencyValidation | high | Unexpected error during validation |
 | `COUNTERPARTY_DETERMINATION_ERROR` | CounterpartyDetermination | high | Unexpected error during lookup |
@@ -851,7 +1071,7 @@ All exceptions are written to the `exception_queue` table.
 | `F14_MAPPING_ERROR` | F14RuleMapping | high | Unexpected error during rule evaluation |
 | `FX_CONVERSION_ERROR` | FXConversion | high | Unexpected error during conversion |
 
-### 9.3 Priority Calculation (amount-based)
+### 10.3 Priority Calculation (amount-based)
 
 For exceptions where priority = "based on amount":
 
@@ -864,11 +1084,11 @@ For exceptions where priority = "based on amount":
 
 ---
 
-## 10. Audit Log Specification
+## 11. Audit Log Specification
 
 The `audit_log` table receives entries from two sources:
 
-### 10.1 Framework-Managed Audit (automatic — via StatusManager)
+### 11.1 Framework-Managed Audit (automatic — via StatusManager)
 
 Every `StatusManager.transition()` call automatically writes a `TransitionAuditEntry` with:
 
@@ -891,7 +1111,7 @@ Examples of auto-generated entries:
 - STATEMENT "ST001": CONSOLIDATED → ENRICHED (triggered_by: "rows-enrichment", reason: "15 success, 0 failures out of 15 total")
 - EXCEPTION "EX001": (null) → OPEN (triggered_by: "rows-enrichment", reason: "MISSING_CUSTOMER: No customer found for bank transaction BT007")
 
-### 10.2 Step-Level Audit (custom — written by pipeline steps)
+### 11.2 Step-Level Audit (custom — written by pipeline steps)
 
 In addition to status transitions, each pipeline step writes a step-level audit entry for detailed operational tracing. These use the same `audit_log` table but with step-specific fields:
 
@@ -912,15 +1132,15 @@ In addition to status transitions, each pipeline step writes a step-level audit 
 | `F14_MAPPED` | F14RuleMapping | Internal type determined |
 | `BASE_CURRENCY_CALCULATED` | FXConversion | EUR amount calculated |
 
-**Note:** The old `ENRICHMENT_SAVED` and `STATEMENT_PROCESSED` action codes are **removed** — these are now covered by framework-managed audit entries from StatusManager transitions (Section 10.1).
+**Note:** The old `ENRICHMENT_SAVED` and `STATEMENT_PROCESSED` action codes are **removed** — these are now covered by framework-managed audit entries from StatusManager transitions (Section 11.1).
 
 ---
 
-## 11. Configuration & Framework Integration Specification
+## 12. Configuration & Framework Integration Specification
 
 The plugin must externalise all configurable values. No hardcoding. Status management must use gam-framework.
 
-### 11.1 Plugin Properties (Joget plugin configuration)
+### 12.1 Plugin Properties (Joget plugin configuration)
 
 | Property | Default | Description |
 |---|---|---|
@@ -929,15 +1149,15 @@ The plugin must externalise all configurable values. No hardcoding. Status manag
 | `settlementConvention` | "2" | Settlement lag in business days (integer as string). "2" = T+2. Selectbox options: 1, 2, 3, 5. Extensible to per-asset-class later |
 | `stopOnError` | false | Whether pipeline stops on first step failure |
 | `batchSize` | 100 | Max statements to process per run |
-| `pipelineVersion` | "2.0" | Version string for lineage tracking |
+| `pipelineVersion` | "3.0" | Version string for lineage tracking |
 | `confidenceThresholdHigh` | 80 | Minimum confidence for "high" classification |
 | `confidenceThresholdMedium` | 50 | Minimum confidence for "medium" classification |
-| `descriptionFieldsBank` | "payment_description,reference_number,other_side_name,other_side_bic,other_side_account" | Comma-separated source fields to include in F01.05 description for bank transactions (see Section 12.2) |
-| `descriptionFieldsSecu` | "description,reference,ticker,quantity,price" | Comma-separated source fields to include in F01.05 description for secu transactions (see Section 12.2) |
+| `descriptionFieldsBank` | "payment_description,reference_number,other_side_name,other_side_bic,other_side_account" | Comma-separated source fields to include in F01.05 description for bank transactions (see Section 13.2) |
+| `descriptionFieldsSecu` | "description,reference,ticker,quantity,price" | Comma-separated source fields to include in F01.05 description for secu transactions (see Section 13.2) |
 | `secuDebitCreditMapping` | "BUY:D,PURCHASE:D,SELL:C,DISPOSE:C,DIVIDEND:C,COUPON:C,INTEREST:C,CUSTODY_FEE:D,SAFEKEEPING:D,FEE:D,TRANSFER_IN:N,TRANSFER_OUT:N,CORPORATE_ACTION:N" | Configurable mapping from F01.04 transaction type to debit_credit (D/C/N). Unmapped types default to N with exception |
 | `descriptionMaxLength` | 2000 | Maximum character length for the built description field |
 
-### 11.2 Table Name Constants (DomainConstants)
+### 12.2 Table Name Constants (DomainConstants)
 
 All table names must be constants, centralised in `DomainConstants.java`:
 
@@ -951,10 +1171,14 @@ All table names must be constants, centralised in `DomainConstants.java`:
 | `TABLE_COUNTERPARTY_MASTER` | `"counterparty_master"` | `"counterparty_master"` (OK) |
 | `TABLE_CURRENCY_MASTER` | `"currency"` | `"currency"` (OK) |
 | `TABLE_ASSET_MASTER` | — | **ADD: `"asset_master"`** (F02.02, formDefId=assetMasterForm) |
+| `TABLE_CP_TXN_MAPPING` | — | **ADD: `"cp_txn_mapping"`** (F02.14 rules) |
+| `TABLE_TRANSACTION_TYPE_MAP` | — | **ADD: `"transactionTypeMap"`** (F02.15 GL patterns) |
+| `TABLE_TRANSACTION_TYPE` | — | **ADD: `"trxType"`** (F10.10 base types) |
 | `TABLE_EXCEPTION_QUEUE` | `"exception_queue"` | `"exception_queue"` (OK) |
 | `TABLE_AUDIT_LOG` | `"audit_log"` | `"audit_log"` (OK) |
+| `TABLE_FX_RATES_EUR` | — | **ADD: `"fx_rates_eur"`** (FX rate table) |
 
-### 11.3 FrameworkConstants.java — Cleanup Required
+### 12.3 FrameworkConstants.java — Cleanup Required
 
 The current `FrameworkConstants.java` contains status constants and processing status strings that **must be replaced** with gam-framework's `Status` enum. This file should be reduced to only non-status constants.
 
@@ -976,7 +1200,7 @@ The current `FrameworkConstants.java` contains status constants and processing s
 
 **After cleanup, FrameworkConstants retains only:** `STATUS_ACTIVE`, `STATUS_ACTIVE_CAPITAL`, `ENTITY_UNKNOWN`, `ENTITY_SYSTEM`, `INTERNAL_TYPE_UNMATCHED`.
 
-### 11.4 Framework Contracts — DataStep Interface & Property Passing
+### 12.4 Framework Contracts — DataStep Interface & Property Passing
 
 **Problem:** Currently pipeline steps are instantiated with no-arg constructors and have no access to plugin configuration. Steps like FXConversionStep need `maxFxRateAgeDays`, CustomerIdentificationStep needs `confidenceThresholdHigh`, etc.
 
@@ -1004,29 +1228,32 @@ public interface DataStep {
     void setProperties(Map<String, Object> properties);  // Option A
 ```
 
-### 11.5 Values That Must NOT Be Hardcoded
+### 12.5 Values That Must NOT Be Hardcoded
 
 | Currently Hardcoded | Location | Must Become |
 |---|---|---|
 | `"SPOT"` (fx_rate_type) | EnrichmentDataPersister.populateFXFields | Removed — not in F01.05 |
 | `"pending"` (pairing_status) | EnrichmentDataPersister.populateMetadataFields | Removed — not in F01.05; has_fee is computed |
-| `"1.0"` (pipeline_version) | FrameworkConstants | Plugin property `pipelineVersion` |
+| `"3.0"` (pipeline_version) | FrameworkConstants | Plugin property `pipelineVersion` |
 | `"SYSTEM"` (created_by) | FrameworkConstants | Removed — Joget handles createdBy natively |
 | `80` (confidence threshold) | CustomerIdentificationStep, determineManualReviewStatus | Plugin property `confidenceThresholdHigh` |
 | `5` (MAX_RATE_AGE_DAYS) | FXConversionStep | Plugin property `maxFxRateAgeDays` |
 | BUY→D, SELL→C (secu debit/credit) | EnrichmentDataPersister | Plugin property `secuDebitCreditMapping` |
 | Hardcoded description source | EnrichmentDataPersister | Plugin properties `descriptionFieldsBank` / `descriptionFieldsSecu` |
-| `"T+2"` (settlement lag) | EnrichmentDataPersister | Plugin property `settlementConvention` (global, extensible to per-asset-class) |
-| All status string literals | Throughout plugin | `Status` enum from gam-framework (see Section 11.3) |
-| Direct status field writes | EnrichmentDataPersister, TransactionDataLoader | `StatusManager.transition()` (see Sections 8.5-8.7) |
+| `"T+2"` (settlement lag) | EnrichmentDataPersister | Plugin property `settlementConvention` (global, extensible to per-asset-class via F02.15 in future) |
+| All status string literals | Throughout plugin | `Status` enum from gam-framework (see Section 12.3) |
+| Direct status field writes | EnrichmentDataPersister, TransactionDataLoader | `StatusManager.transition()` (see Sections 9.5-9.7) |
+| Internal type list | F14RuleMapping | Loaded from F02.14/F02.15 at runtime, not hardcoded |
+| Transaction type codes | Throughout | Loaded from F10.10 at startup, not hardcoded |
+| Counterparty rules | F14RuleMapping | Loaded from F02.14 at runtime, not hardcoded |
 
 ---
 
-## 12. Fields Dropped from Persister & Description Builder
+## 13. Fields Dropped from Persister & Description Builder
 
-### 12.1 Fields Dropped from Persister
+### 13.1 Fields Dropped from Persister
 
-The following fields are currently written by the plugin but have no corresponding F01.05 field. They are **removed** from the persister. However, some of them serve as inputs to the configurable **Description Builder** (Section 12.2) so that useful context is preserved in the `description` field for manual resolution.
+The following fields are currently written by the plugin but have no corresponding F01.05 field. They are **removed** from the persister. However, some of them serve as inputs to the configurable **Description Builder** (Section 13.2) so that useful context is preserved in the `description` field for manual resolution.
 
 | Dropped Field | Reason | Description Builder Candidate |
 |---|---|---|
@@ -1062,7 +1289,7 @@ The following fields are currently written by the plugin but have no correspondi
 | `version_number` | Renamed to version | No |
 | `matching_confidence` | Replaced by type_confidence SelectBox mapping | No |
 
-### 12.2 Description Builder
+### 13.2 Description Builder
 
 The `description` field in F01.05 is populated by a configurable **Description Builder** that concatenates selected source fields into a single human-readable string. This preserves useful context from the source transaction (F01.03/F01.04) for operators performing manual resolution, without requiring separate F01.05 fields for each source attribute.
 
@@ -1096,546 +1323,162 @@ description: BUY 500 AAPL NASDAQ | reference: TRD-2024-0315-001 | ticker: AAPL |
 
 ---
 
-## 13. Resolved Questions (formerly Open)
+## 14. Key Principles — Everything Configurable
 
-All questions have been resolved. Decisions documented here for traceability.
+This specification is built on the principle that **no behavior should be hardcoded**. All configurable elements come from metadata forms or plugin properties:
 
-| # | Question | Resolution | Spec Impact |
-|---|---|---|---|
-| 1 | For securities transactions, should resolved_customer_id be the bank's own customer record, or left empty? | **Yes — customer must be resolved for both bank and secu.** The customer is the bank's client whose portfolio is being managed. Only rare internal/technical transactions may have no customer. | Section 7.3: execution condition changed to "Always (both bank and secu)". Section 8.4 Customer Resolution note updated. Plugin property `defaultSecuCustomerId` removed. |
-| 2 | Should settlement_date use a configurable T+N per asset class, or a single global default? | **Start with global default (T+2), keep extensible.** Can be extended to per-asset-class lookup later without pipeline changes. | Section 8.4: settlement_date includes extensibility note. Section 11.1: `settlementConvention` property documented with extensibility note. |
-| 3 | Should the `description` field combine multiple source fields? | **Yes — configurable Description Builder.** A comma-separated list of source field names per source type. Reasonable defaults provided. References are included in the default lists. | New Section 12.2: Description Builder specification. Section 8.4: description source updated. Section 11.1: `descriptionFieldsBank` and `descriptionFieldsSecu` properties added. |
-| 4 | How should BUY/SELL map to debit_credit D/C/N for securities? | **Configurable mapping with accounting defaults.** BUY/PURCHASE→D, SELL/DISPOSE→C, DIVIDEND/COUPON/INTEREST→C, CUSTODY_FEE/SAFEKEEPING/FEE→D, TRANSFER_IN/OUT→N, CORPORATE_ACTION→N, unmapped→N+exception. | Section 8.4: debit/credit derivation table added. Section 11.1: `secuDebitCreditMapping` property added. |
-| 5 | Should reference_number (bank) and reference (secu) be preserved in F01.05? | **Yes — via Description Builder.** Both `reference_number` and `reference` are included in the default description field lists, so they are preserved in the `description` field without needing separate F01.05 columns. | Covered by Section 12.2 Description Builder. Default field lists include these. |
+| Behavior | Source | Configurable |
+|---|---|---|
+| Base transaction types (8 types) | F10.10 (trxType) | Yes — add/remove rows to F10.10 |
+| Extended transaction types (31 types) | F02.15 (transactionTypeMap) | Yes — add rows to F02.15 |
+| Rule-based classification (40 rules) | F02.14 (cpTxnMappingForm) | Yes — add/modify rows to F02.14 |
+| GL posting patterns | F02.15 (GL Debit/Credit patterns) | Yes — configure patterns per internal type |
+| Settlement days (T+N) | Plugin property `settlementConvention` + (future) F02.15 `settlementDays` field | Yes — change property or extend F02.15 |
+| Confidence thresholds | Plugin properties `confidenceThresholdHigh`, `confidenceThresholdMedium` | Yes — adjust thresholds |
+| Debit/Credit mapping for securities | Plugin property `secuDebitCreditMapping` | Yes — add/modify mappings |
+| Description field composition | Plugin properties `descriptionFieldsBank`, `descriptionFieldsSecu` | Yes — change source field lists |
+| FX rate age tolerance | Plugin property `maxFxRateAgeDays` | Yes — adjust tolerance |
+| Base currency | Plugin property `baseCurrency` | Yes — change reporting currency |
+| Status lifecycle | gam-framework `Status` enum + plugin calls to `StatusManager` | Yes — gam-framework can be extended |
+
+### 14.1 How to Extend Without Code Changes
+
+**Example 1: Add a new transaction type**
+1. Add a row to F02.15 with new internal type code, GL patterns, description
+2. No code change needed — the F14RuleMapping step loads from F02.15 at runtime
+
+**Example 2: Add a new matching rule**
+1. Add a row to F02.14 with the new rule details (counterparty, matching field, match value, target internal type)
+2. No code change needed — the F14RuleMapping step loads from F02.14 at runtime
+
+**Example 3: Extend settlement days to be per-transaction-type**
+1. Add a `settlementDays` column to F02.15
+2. Update EnrichmentDataPersister.computeSettlementDate() to look up F02.15 by internal_type
+3. This is an enhancement to the persister only; the plugin interface and pipeline remain unchanged
+
+**Example 4: Change debit/credit mapping for a transaction type**
+1. Edit the `secuDebitCreditMapping` plugin property
+2. No code change needed
 
 ---
 
-## 14. Unit Test Specification
-
-The rows-enrichment plugin currently ships with **zero test files**. This is unacceptable — the plugin manipulates financial data across 6 pipeline steps and writes 52 fields per enrichment record. Every class must have unit tests before the implementation is considered complete.
-
-### 14.1 Test Framework & Dependencies
-
-**Framework:** JUnit 4.13.2 + Mockito 4.11.0 (consistent with gam-framework).
-
-**pom.xml additions required:**
-
-```xml
-<dependency>
-    <groupId>org.mockito</groupId>
-    <artifactId>mockito-core</artifactId>
-    <version>4.11.0</version>
-    <scope>test</scope>
-</dependency>
-```
-
-**Test directory structure:**
-
-```
-src/test/java/com/fiscaladmin/gam/enrichrows/
-├── loader/
-│   └── TransactionDataLoaderTest.java
-├── steps/
-│   ├── CurrencyValidationStepTest.java
-│   ├── CounterpartyDeterminationStepTest.java
-│   ├── CustomerIdentificationStepTest.java
-│   ├── AssetResolutionStepTest.java
-│   ├── F14RuleMappingStepTest.java
-│   └── FXConversionStepTest.java
-├── persister/
-│   └── EnrichmentDataPersisterTest.java
-├── framework/
-│   ├── DataPipelineTest.java
-│   └── DataContextTest.java
-├── lib/
-│   └── RowsEnricherIntegrationTest.java
-└── helpers/
-    └── TestDataFactory.java
-```
-
-**Pattern:** Follow gam-framework test conventions — `@Mock FormDataDao mockDao`, `MockitoAnnotations.initMocks(this)`, `ArgumentCaptor` for verifying saved data, helper methods for building test fixtures.
-
-### 14.2 Shared Test Utilities — TestDataFactory
-
-A dedicated helper class providing reusable builders for test data. Every test class uses these instead of constructing FormRow/FormRowSet manually.
-
-| Factory Method | Returns | Purpose |
-|---|---|---|
-| `bankContext(overrides...)` | `DataContext` | Pre-populated bank DataContext with sensible defaults (EUR, valid customer, etc.) |
-| `secuContext(overrides...)` | `DataContext` | Pre-populated secu DataContext with sensible defaults (USD, valid ISIN, etc.) |
-| `bankSourceRow(overrides...)` | `FormRow` | Mimics F01.03 row with all fields loader would read |
-| `secuSourceRow(overrides...)` | `FormRow` | Mimics F01.04 row with all fields loader would read |
-| `currencyRow(code, name)` | `FormRow` | Mimics MDM currency lookup result |
-| `counterpartyRow(bic, name)` | `FormRow` | Mimics MDM counterparty lookup result |
-| `customerRow(id, name)` | `FormRow` | Mimics MDM customer lookup result |
-| `assetRow(isin, name, class)` | `FormRow` | Mimics MDM asset master lookup result |
-| `f14RuleRow(...)` | `FormRow` | Mimics F14 rule mapping row |
-| `fxRateRow(from, to, rate, date)` | `FormRow` | Mimics FX rate lookup result |
-| `pluginProperties(overrides...)` | `Map<String, Object>` | Default plugin properties with override capability |
-
-### 14.3 TransactionDataLoaderTest
-
-Tests the loading of bank and securities transactions from CONSOLIDATED statements and construction of DataContext objects.
-
-**Mock setup:** `@Mock FormDataDao`, `@Mock StatusManager`.
-
-| # | Test | Asserts |
-|---|---|---|
-| 1 | `load_bankStatement_buildsContextsForAllTransactions` | Given a statement with 3 bank rows in `Status.NEW`, returns 3 DataContext objects with `source_type=bank` |
-| 2 | `load_secuStatement_buildsContextsForAllTransactions` | Given a statement with 2 secu rows in `Status.NEW`, returns 2 DataContext objects with `source_type=secu` |
-| 3 | `load_transitionsSourceTrx_newToProcessing` | Verify `StatusManager.transition()` called with `EntityType.BANK_TRX`, `Status.PROCESSING` for each loaded row |
-| 4 | `load_skipsNonNewTransactions` | Given rows with status ENRICHED and ERROR, they are excluded from the returned list |
-| 5 | `load_bankContext_allFieldsPopulated` | All core fields from Section 5.1 + bank fields from Section 5.2 are non-null on returned context |
-| 6 | `load_secuContext_allFieldsPopulated` | All core fields from Section 5.1 + secu fields from Section 5.3 are non-null on returned context |
-| 7 | `load_onlyConsolidatedStatements` | Given statements with status NEW and IMPORTED, they are ignored (only CONSOLIDATED loaded) |
-| 8 | `load_emptyStatement_returnsEmptyList` | Statement with zero rows → empty result, no exceptions |
-| 9 | `load_statusTransitionFailure_throwsAndAbortsStatement` | If `StatusManager.transition()` throws `InvalidTransitionException`, the statement is skipped with error logged |
-
-### 14.4 CurrencyValidationStepTest
-
-Tests currency validation against MDM currency list (Section 7.1).
-
-**Mock setup:** `@Mock FormDataDao` (for currency lookup queries).
-
-| # | Test | Asserts |
-|---|---|---|
-| 1 | `execute_validCurrency_stepsSucceeds` | EUR in MDM → `StepResult.success()`, context unchanged |
-| 2 | `execute_invalidCurrency_setsError` | ZZZ not in MDM → `StepResult.error()`, context `hasError()=true`, `error_detail` populated |
-| 3 | `execute_nullCurrency_setsError` | Null currency on context → error, not NPE |
-| 4 | `execute_emptyCurrency_setsError` | Empty string currency → error |
-| 5 | `execute_caseSensitivity` | "eur" vs "EUR" — verify behaviour matches implementation (likely case-insensitive) |
-| 6 | `shouldExecute_alwaysTrue` | Step executes for both bank and secu |
-
-### 14.5 CounterpartyDeterminationStepTest
-
-Tests BIC-based counterparty lookup (Section 7.2).
-
-**Mock setup:** `@Mock FormDataDao` (for counterparty MDM lookup).
-
-| # | Test | Asserts |
-|---|---|---|
-| 1 | `execute_knownBic_resolvesCounterparty` | BIC found in MDM → sets `counterparty_id`, `counterparty_name` in additionalData |
-| 2 | `execute_unknownBic_setsUnknown` | BIC not in MDM → sets `counterparty_id="UNKNOWN"`, `counterparty_name="UNKNOWN"` |
-| 3 | `execute_nullBic_setsUnknown` | Null BIC → UNKNOWN, not NPE |
-| 4 | `execute_emptyBic_setsUnknown` | Empty string BIC → UNKNOWN |
-| 5 | `execute_multipleBicMatches_usesFirst` | If lookup returns multiple rows, first match is used |
-| 6 | `shouldExecute_alwaysTrue` | Executes for both bank and secu source types |
-
-### 14.6 CustomerIdentificationStepTest
-
-Tests customer resolution for both bank and secu (Section 7.3 — changed from bank-only).
-
-**Mock setup:** `@Mock FormDataDao` (for customer MDM lookup).
-
-| # | Test | Asserts |
-|---|---|---|
-| 1 | `execute_bank_knownAccount_resolvesCustomer` | Account found → sets `customer_id`, `customer_name`, `customer_confidence ≥ 80` |
-| 2 | `execute_bank_unknownAccount_setsUnknown` | Account not in MDM → `customer_id="UNKNOWN"` |
-| 3 | `execute_secu_resolvesCustomer` | **Critical: secu now also resolves customer** (Section 7.3 change) |
-| 4 | `execute_secu_unknownPortfolio_setsUnknown` | Portfolio not matched → `customer_id="UNKNOWN"` |
-| 5 | `shouldExecute_bank_returnsTrue` | Execution condition: always true for bank |
-| 6 | `shouldExecute_secu_returnsTrue` | **Critical: must now return true for secu** (verifies Section 7.3 change) |
-| 7 | `execute_lowConfidence_belowThreshold` | Match exists but confidence < threshold → still resolves but confidence recorded for manual review trigger |
-| 8 | `execute_properties_confidenceThreshold` | Verify `setProperties()` passes custom confidence threshold and it is respected |
-
-### 14.7 AssetResolutionStepTest
-
-Tests the **new** AssetResolutionStep (Section 7.4).
-
-**Mock setup:** `@Mock FormDataDao` (for asset_master lookup).
-
-| # | Test | Asserts |
-|---|---|---|
-| 1 | `execute_secu_knownIsin_resolvesAsset` | ISIN found in asset_master → sets `asset_id`, `asset_name`, `asset_class` |
-| 2 | `execute_secu_unknownIsin_setsUnknown` | ISIN not in asset_master → `asset_id="UNKNOWN"` |
-| 3 | `execute_secu_nullIsin_setsUnknown` | No ISIN on context → UNKNOWN, not NPE |
-| 4 | `execute_bank_isSkipped` | Bank source type → step does not execute (assets are securities-specific) |
-| 5 | `shouldExecute_secu_returnsTrue` | Execution condition: true for secu |
-| 6 | `shouldExecute_bank_returnsFalse` | Execution condition: false for bank |
-| 7 | `execute_enrichesAssetClassFromMaster` | Verify `asset_class` is populated from F02.02 field |
-| 8 | `execute_lookupByIsinField` | Verify the MDM query uses the correct ISIN field name from source context |
-
-### 14.8 F14RuleMappingStepTest
-
-Tests rule-based classification of transactions to internal types (Section 7.5).
-
-**Mock setup:** `@Mock FormDataDao` (for F14 rule table lookup).
-
-| # | Test | Asserts |
-|---|---|---|
-| 1 | `execute_matchingRule_setsInternalType` | Rule match found → sets `internal_type` from rule |
-| 2 | `execute_noMatchingRule_setsUnmatched` | No rule matches → `internal_type="UNMATCHED"` |
-| 3 | `execute_multipleMatchingRules_usesHighestPriority` | Multiple rules match → highest priority (or first match) wins |
-| 4 | `execute_ruleWithAccountingType_setsAccountingType` | Rule provides accounting classification → sets `accounting_type` |
-| 5 | `execute_bank_usesCorrectLookupFields` | Bank context → rule matching uses bank-specific fields (e.g. payment_code) |
-| 6 | `execute_secu_usesCorrectLookupFields` | Secu context → rule matching uses secu-specific fields (e.g. transaction_type_code) |
-| 7 | `shouldExecute_alwaysTrue` | Executes for both source types |
-
-### 14.9 FXConversionStepTest
-
-Tests FX rate lookup and amount conversion (Section 7.6).
-
-**Mock setup:** `@Mock FormDataDao` (for FX rate table lookup).
-
-| # | Test | Asserts |
-|---|---|---|
-| 1 | `execute_sameCurrency_noConversion` | Transaction currency = reporting currency → `amount_reporting = amount_original`, `fx_rate = 1.0`, `fx_rate_source = "BASE_CURRENCY"` (per Section 7.6) |
-| 2 | `execute_differentCurrency_convertsAmount` | EUR→CHF, rate 0.95 → `amount_reporting = amount_original × 0.95`, `fx_rate = 0.95` |
-| 3 | `execute_noRateFound_setsError` | No FX rate available → `fx_rate_source = "MISSING"`, step records error |
-| 4 | `execute_staleRate_respectsMaxAge` | Rate older than `maxRateAgeDays` property → treated as missing |
-| 5 | `execute_maxRateAgeDays_fromProperties` | Verify `setProperties()` passes custom MAX_RATE_AGE_DAYS and it is respected |
-| 6 | `execute_nullAmount_setsError` | Null original amount → error, not NPE |
-| 7 | `execute_zeroAmount_convertsCorrectly` | Zero amount × rate → zero reporting amount (not error) |
-| 8 | `execute_numericPrecision_fourDecimals` | Verify converted amount preserves 4 decimal places |
-| 9 | `shouldExecute_alwaysTrue` | Executes for both source types |
-
-### 14.10 EnrichmentDataPersisterTest
-
-Tests the core persistence logic — 52-field mapping, status determination, Description Builder, debit/credit mapping. This is the most critical test class.
-
-**Mock setup:** `@Mock FormDataDao`, `@Mock StatusManager`.
-
-**14.10.1 — Field Mapping (52 fields)**
-
-| # | Test | Asserts |
-|---|---|---|
-| 1 | `persist_bank_allFieldsMapped` | Bank context → saved FormRow contains all 52 fields from Section 8.4 with correct values |
-| 2 | `persist_secu_allFieldsMapped` | Secu context → saved FormRow contains all 52 fields with correct secu-specific values |
-| 3 | `persist_recordId_format` | Verify generated record ID follows the format from Section 8.3 |
-| 4 | `persist_enrichmentDate_isNow` | `enrichment_date` is set to current timestamp |
-| 5 | `persist_sourceType_bank` | Bank context → `source_type = "bank"` |
-| 6 | `persist_sourceType_secu` | Secu context → `source_type = "secu"` |
-
-**14.10.2 — Status Determination (Section 8.5)**
-
-| # | Test | Asserts |
-|---|---|---|
-| 7 | `persist_allStepsOk_statusEnriched` | No errors, no UNKNOWN, no UNMATCHED → `StatusManager.transition()` called with `Status.ENRICHED` |
-| 8 | `persist_unknownCustomer_statusManualReview` | `customer_id="UNKNOWN"` → transition to `Status.MANUAL_REVIEW` |
-| 9 | `persist_unknownCounterparty_statusManualReview` | `counterparty_id="UNKNOWN"` → `Status.MANUAL_REVIEW` |
-| 10 | `persist_unmatchedInternalType_statusManualReview` | `internal_type="UNMATCHED"` → `Status.MANUAL_REVIEW` |
-| 11 | `persist_lowConfidence_statusManualReview` | `customer_confidence < 80` → `Status.MANUAL_REVIEW` |
-| 12 | `persist_unknownAsset_secu_statusManualReview` | Secu with `asset_id="UNKNOWN"` → `Status.MANUAL_REVIEW` |
-| 13 | `persist_missingFxRate_statusManualReview` | `fx_rate_source="MISSING"` → `Status.MANUAL_REVIEW` |
-| 14 | `persist_contextError_statusError` | `context.hasError()=true` → transition to `Status.ERROR` |
-| 15 | `persist_multipleManualReviewTriggers_singleTransition` | Multiple UNKNOWN fields → still one transition to MANUAL_REVIEW with combined reason |
-
-**14.10.3 — StatusManager Integration (Sections 8.5, 8.6, 8.7)**
-
-| # | Test | Asserts |
-|---|---|---|
-| 16 | `persist_enrichmentLifecycle_3transitions` | Verify exactly 3 transitions: null→NEW, NEW→PROCESSING, PROCESSING→{final} using `ArgumentCaptor` |
-| 17 | `persist_usesCustomTableName_trxEnrichment` | Verify transitions use `"trxEnrichment"` (not `"trx_enrichment"`) for ENRICHMENT entity |
-| 18 | `persist_sourceTransactionStatus_enriched` | After enriched record saved, source BANK_TRX transitions to ENRICHED |
-| 19 | `persist_sourceTransactionStatus_error` | After error record, source BANK_TRX transitions to ERROR |
-| 20 | `persist_sourceTransactionStatus_manualReview` | After manual review record, source transitions to MANUAL_REVIEW |
-| 21 | `persist_invalidTransition_createsException` | If `StatusManager.transition()` throws `InvalidTransitionException`, exception queue entry is created |
-
-**14.10.4 — Description Builder (Section 12.2)**
-
-| # | Test | Asserts |
-|---|---|---|
-| 22 | `persist_bank_description_defaultFields` | Bank → description contains `payment_description`, `reference_number`, `other_side_name`, `other_side_bic`, `other_side_account` separated by ` \| ` |
-| 23 | `persist_secu_description_defaultFields` | Secu → description contains `description`, `reference`, `ticker`, `quantity`, `price` |
-| 24 | `persist_description_skipsNullFields` | Source field is null → omitted from description (no "null" text) |
-| 25 | `persist_description_skipsEmptyFields` | Source field is empty string → omitted |
-| 26 | `persist_description_truncatesAt2000` | Very long values → truncated to 2000 chars preserving complete last field |
-| 27 | `persist_description_customFieldList` | Plugin property overrides default list → only configured fields appear |
-| 28 | `persist_description_fieldLabelFormat` | Each field formatted as `field_name: value` |
-
-**14.10.5 — Debit/Credit Mapping (Section 8.4, Q13.4)**
-
-| # | Test | Asserts |
-|---|---|---|
-| 29 | `persist_bank_debitCredit_fromSource` | Bank → `debit_credit` copied directly from F01.03 source field |
-| 30 | `persist_secu_buy_debit` | Secu BUY → `debit_credit = "D"` |
-| 31 | `persist_secu_sell_credit` | Secu SELL → `debit_credit = "C"` |
-| 32 | `persist_secu_dividend_credit` | Secu DIVIDEND → `debit_credit = "C"` |
-| 33 | `persist_secu_fee_debit` | Secu CUSTODY_FEE → `debit_credit = "D"` |
-| 34 | `persist_secu_transfer_neutral` | Secu TRANSFER_IN → `debit_credit = "N"` |
-| 35 | `persist_secu_unmappedType_neutral_plusException` | Unmapped type → `debit_credit = "N"` and exception queue entry created |
-| 36 | `persist_secu_customMapping` | Plugin property `secuDebitCreditMapping` overrides defaults → verified |
-
-**14.10.6 — Settlement Date (Section 8.4)**
-
-| # | Test | Asserts |
-|---|---|---|
-| 37 | `persist_settlementDate_defaultTPlus2` | Transaction date + 2 business days = settlement date |
-| 38 | `persist_settlementDate_customConvention` | Plugin property `settlementConvention=3` → T+3 |
-| 39 | `persist_settlementDate_weekendSkip` | Friday transaction → settlement date is next Tuesday (skips weekend) |
-
-**14.10.7 — Batch Completion (Section 8.7)**
-
-| # | Test | Asserts |
-|---|---|---|
-| 40 | `batchComplete_allSuccess_statementEnriched` | 0 failures → `StatusManager.transition()` called with `Status.ENRICHED` on statement |
-| 41 | `batchComplete_anyFailure_statementError` | ≥1 failures → statement transitions to `Status.ERROR` |
-| 42 | `batchComplete_updatesStatementMetadata` | `processing_completed`, `transactions_processed`, `transactions_success`, `transactions_failed` all set |
-
-### 14.11 DataPipelineTest
-
-Tests the pipeline orchestration (step ordering, error propagation, result aggregation).
-
-**Mock setup:** `@Mock DataStep` (multiple), `@Mock FormDataDao`.
-
-| # | Test | Asserts |
-|---|---|---|
-| 1 | `execute_runsStepsInOrder` | Steps execute in registration order (1→6), verified via `InOrder` |
-| 2 | `execute_stepError_stopsExecution` | Step 2 returns error → steps 3–6 are NOT executed |
-| 3 | `execute_stepError_aggregatesInResult` | Error from step → `PipelineResult.hasError()=true`, error message captured |
-| 4 | `execute_allStepsSuccess_resultOk` | All 6 steps succeed → `PipelineResult.hasError()=false` |
-| 5 | `execute_stepShouldExecuteFalse_isSkipped` | Step's `shouldExecute()` returns false → step skipped, next step runs |
-| 6 | `execute_propertiesPassed_toAllSteps` | After `setProperties()`, all steps receive the properties map |
-| 7 | `execute_emptyPipeline_succeeds` | No steps added → result OK (no NPE) |
-
-### 14.12 DataContextTest
-
-Tests DataContext data integrity (Section 5).
-
-| # | Test | Asserts |
-|---|---|---|
-| 1 | `setAndGet_coreFields` | All core fields (Section 5.1) round-trip correctly |
-| 2 | `setAndGet_bankFields` | All bank-specific fields (Section 5.2) round-trip |
-| 3 | `setAndGet_secuFields` | All secu-specific fields (Section 5.3) round-trip |
-| 4 | `additionalData_putAndGet` | additionalData map stores and retrieves arbitrary keys |
-| 5 | `hasError_defaultFalse` | New context → `hasError()=false` |
-| 6 | `setError_hasErrorTrue` | After setting error → `hasError()=true` |
-
-### 14.13 RowsEnricherIntegrationTest
-
-End-to-end test of the full plugin pipeline with all components wired together but database mocked.
-
-**Mock setup:** `@Mock FormDataDao` (all lookup queries mocked with representative data), real `StatusManager`, real pipeline steps, real persister.
-
-| # | Test | Asserts |
-|---|---|---|
-| 1 | `enrich_bankTransaction_happyPath` | Complete bank flow: load → 6 steps → persist → verify all 52 fields on saved FormRow |
-| 2 | `enrich_secuTransaction_happyPath` | Complete secu flow: load → 6 steps → persist → verify all 52 fields |
-| 3 | `enrich_bankTransaction_unknownCounterparty` | Unknown BIC → enrichment record has status MANUAL_REVIEW, exception queue entry created |
-| 4 | `enrich_secuTransaction_unknownAsset` | Unknown ISIN → MANUAL_REVIEW, exception created |
-| 5 | `enrich_invalidCurrency_errorStatus` | Invalid currency → ERROR status, pipeline stops after step 1 |
-| 6 | `enrich_batchOf3_mixedResults` | 3 transactions (1 success, 1 manual review, 1 error) → correct counts, statement transitions to ERROR |
-| 7 | `enrich_allSuccess_statementEnriched` | All transactions succeed → statement transitions to ENRICHED |
-| 8 | `enrich_statusTransitions_verifyOrder` | Verify complete transition sequence: source NEW→PROCESSING, enrichment null→NEW→PROCESSING→{final}, source →{final} |
-
-### 14.14 Coverage Target & Constraints
-
-**Minimum coverage target:** 85% line coverage, 80% branch coverage across all classes except `Activator.java` (OSGi boilerplate, exempt from testing).
-
-**What must NOT be tested:**
-- `Activator.java` — OSGi lifecycle, tested by the container
-- Joget platform internals (`FormDataDao` implementation, `FormRow` internals) — mocked in all tests
-
-**What MUST reach 100% branch coverage:**
-- `needsManualReview()` logic in persister (Section 8.5) — every condition tested individually and in combination
-- Debit/credit mapping (every mapped type + unmapped fallback)
-- Description Builder field-skipping logic (null, empty, truncation)
-
-**Build integration:** Tests run automatically via `mvn test` (already configured in pom.xml with `maven-surefire-plugin`). CI must fail on test failures — `<skipTests>false</skipTests>` is already set.
-
-**Test naming convention:** `methodUnderTest_scenario_expectedBehaviour` (consistent with gam-framework tests).
+## 15. Internal Type Consistency Across Metadata Forms
+
+This section verifies that internal types are consistent across all three metadata forms.
+
+### 15.1 F10.10 Base Types (8)
+
+From the CSV, the official 8 base types are:
+1. BOND_BUY
+2. BOND_INTEREST
+3. CASH_IN_OUT
+4. COMM_FEE
+5. DIV_INCOME
+6. SEC_BUY
+7. SEC_SELL
+8. (one additional type, unclear from CSV)
+
+### 15.2 F02.14 Target Internal Types (from 40 rules)
+
+Extracting unique internal types from the 40 rules:
+ASSET_RETURN, BANK_BOND, BANK_TRANS, BOND_BUY, BOND_INT, CASH_IN, CASH_OUT, COMM_BUY, COMM_FEE, CUST_INT, DIV_INCOME, EQ_BUY, EQ_SELL, INT_EXPENSE, INT_INCOME, INV_INCOME, INV_TRANS, LOAN_PAYMENT, LOCAL_BOND, MGMT_FEE, SEC_BUY, SEC_DEPOSIT, SEC_SELL, SEC_TRANS, SPLIT_IN, SPLIT_OUT, TECH_BUY
+
+Total: **27 distinct types in F02.14**
+
+### 15.3 F02.15 Internal Types (31 in form)
+
+1. INT_INCOME
+2. INT_EXPENSE
+3. SEC_BUY
+4. SEC_SELL
+5. COMM_FEE
+6. DIV_INCOME
+7. MGMT_FEE
+8. LOAN_PAYMENT
+9. INV_INCOME
+10. ASSET_RETURN
+11. CASH_IN
+12. CASH_OUT
+13. EQ_BUY
+14. EQ_SELL
+15. BOND_BUY
+16. BOND_INT
+17. SPLIT_IN
+18. SPLIT_OUT
+19. SEC_DEPOSIT
+20. SEC_WITHDRAW
+21. TECH_BUY
+22. COMM_BUY
+23. LOCAL_BOND
+24. BANK_BOND
+25. SEC_TRANS
+26. BANK_TRANS
+27. INV_TRANS
+28. CUST_INT
+29. FX_CONV
+30. CUSTODY_FEE
+31. (reserved)
+
+Total: **30 assigned + 1 reserved = 31 slots**
+
+### 15.4 Reconciliation & Consistency Notes
+
+The plugin must support all 31 internal types defined in F02.15 as the authoritative list of valid transaction classifications. The 40 rules in F02.14 map to these types. The 8 base types in F10.10 are a simplified classification for high-level reporting.
+
+**Key consistency rules:**
+1. All internal types referenced in F02.14 matching rules must exist in F02.15
+2. All internal types that may appear in enriched transactions must be defined in F02.15 (for GL posting pattern lookup)
+3. F10.10 contains only the 8 base types; F02.15 extends with domain-specific types (TECH_BUY, CUST_INT, etc.)
+4. No hardcoding of internal type lists — both the plugin and operations team refer to F02.15 as source of truth
 
 ---
 
-## 15. Joget Plugin Integration Specification
+## 16. Manual Review Conditions
 
-The rows-enrichment plugin extends `DefaultApplicationPlugin` (a Joget **Process Tool Plugin**). It is designed to run as a tool within a Joget workflow process. This section specifies how the plugin integrates with the Joget platform.
+The enrichment persister marks a record for manual review (Status.MANUAL_REVIEW) if **any** of these 6 conditions are true:
 
-### 15.1 Plugin Registration & Lifecycle
+1. **UNKNOWN customer:** `resolved_customer_id = "UNKNOWN"` (customer could not be identified)
+2. **UNKNOWN counterparty:** `counterparty_id = "UNKNOWN"` (no matching counterparty for BIC)
+3. **UNMATCHED internal type:** `internal_type = "UNMATCHED"` (no F14 rule matched)
+4. **Low customer confidence:** `customer_confidence < confidenceThresholdHigh` (default: < 80)
+5. **UNKNOWN asset (securities only):** `asset_id = "UNKNOWN"` (ticker not in asset master)
+6. **Missing FX rate:** `fx_rate_source = "MISSING"` (no FX rate found within tolerance)
 
-**Plugin class:** `com.fiscaladmin.gam.enrichrows.lib.RowsEnricher`
-**Extends:** `org.joget.plugin.base.DefaultApplicationPlugin`
-**OSGi Activator:** `com.fiscaladmin.gam.Activator` — registers the plugin with Joget's plugin manager on bundle start.
-
-**Lifecycle:**
-1. OSGi container loads the bundle and calls `Activator.start()`
-2. Workflow reaches the tool activity mapped to this plugin
-3. Joget calls `RowsEnricher.execute(Map properties)` with the properties configured in the workflow tool mapping
-4. Plugin returns a result string (success summary or error message)
-5. Workflow continues to the next activity
-
-**Required overrides:**
-
-| Method | Current Value | Change |
-|---|---|---|
-| `getName()` | `"Rows Enrichment"` | No change |
-| `getDescription()` | `"This plugin will enrich statement rows"` | No change |
-| `getVersion()` | `"8.1-SNAPSHOT"` | No change |
-| `getLabel()` | `"Rows Enrichment"` | No change |
-| `getClassName()` | `getClass().getName()` | No change |
-| `getPropertyOptions()` | `AppUtil.readPluginResource(getClass().getName(), "", null, true, null)` | **Change:** Load from `/properties/app/RowsEnricher.json` (see Section 15.2) |
-
-### 15.2 Property Options JSON — NEW file
-
-**File:** `src/main/resources/properties/app/RowsEnricher.json`
-
-This file defines the configuration UI that Joget renders when an administrator maps this plugin to a workflow tool activity. Every property from Section 11.1 must appear here. Format follows the Joget property options JSON convention (array of page objects, each with title and properties array).
-
-**Joget property types used:**
-
-| Type | Joget JSON type | Used For |
-|---|---|---|
-| Text input | `textfield` | baseCurrency, descriptionFieldsBank, descriptionFieldsSecu, secuDebitCreditMapping, descriptionMaxLength |
-| Number input | `textfield` + `regex_validation` | maxFxRateAgeDays, batchSize, confidenceThresholdHigh, confidenceThresholdMedium |
-| Select box | `selectbox` | settlementConvention, stopOnError |
-| Read-only | `textfield` + `readonly: true` | pipelineVersion (for lineage, not user-editable) |
-
-**Required structure:**
-
-```json
-[{
-    "title": "General",
-    "properties": [
-        { "name": "baseCurrency", "label": "Base / Reporting Currency", "type": "textfield", "value": "EUR",
-          "description": "ISO 4217 code for the reporting currency" },
-        { "name": "pipelineVersion", "label": "Pipeline Version", "type": "textfield", "value": "2.0",
-          "description": "Version identifier written to every enrichment record for lineage tracking",
-          "readonly": "true" },
-        { "name": "batchSize", "label": "Batch Size", "type": "textfield", "value": "100",
-          "description": "Maximum number of statements to process per plugin execution",
-          "regex_validation": "^[0-9]+$", "validation_message": "Must be a positive integer" },
-        { "name": "stopOnError", "label": "Stop Pipeline on Error", "type": "selectbox", "value": "false",
-          "options": [{ "value": "false", "label": "Continue (process all transactions)" },
-                      { "value": "true", "label": "Stop (abort on first step failure)" }],
-          "description": "Whether the pipeline stops on first step failure or continues" }
-    ]
-}, {
-    "title": "Enrichment Pipeline",
-    "properties": [
-        { "name": "confidenceThresholdHigh", "label": "High Confidence Threshold (%)", "type": "textfield",
-          "value": "80", "description": "Minimum confidence for automatic enrichment (below → MANUAL_REVIEW)",
-          "regex_validation": "^[0-9]+$", "validation_message": "Must be 0-100" },
-        { "name": "confidenceThresholdMedium", "label": "Medium Confidence Threshold (%)", "type": "textfield",
-          "value": "50", "description": "Minimum confidence for medium classification",
-          "regex_validation": "^[0-9]+$", "validation_message": "Must be 0-100" },
-        { "name": "maxFxRateAgeDays", "label": "Max FX Rate Age (days)", "type": "textfield",
-          "value": "5", "description": "FX rates older than this are treated as missing",
-          "regex_validation": "^[0-9]+$", "validation_message": "Must be a positive integer" },
-        { "name": "settlementConvention", "label": "Settlement Convention", "type": "selectbox",
-          "value": "2",
-          "options": [{ "value": "1", "label": "T+1" }, { "value": "2", "label": "T+2" },
-                      { "value": "3", "label": "T+3" }, { "value": "5", "label": "T+5" }],
-          "description": "Global settlement lag for securities. Extensible to per-asset-class later" }
-    ]
-}, {
-    "title": "Description Builder",
-    "properties": [
-        { "name": "descriptionFieldsBank", "label": "Bank Description Fields",
-          "type": "textfield",
-          "value": "payment_description,reference_number,other_side_name,other_side_bic,other_side_account",
-          "description": "Comma-separated list of F01.03 fields to include in F01.05 description" },
-        { "name": "descriptionFieldsSecu", "label": "Securities Description Fields",
-          "type": "textfield",
-          "value": "description,reference,ticker,quantity,price",
-          "description": "Comma-separated list of F01.04 fields to include in F01.05 description" },
-        { "name": "descriptionMaxLength", "label": "Max Description Length",
-          "type": "textfield", "value": "2000",
-          "description": "Maximum character length for built description (truncates preserving last complete field)",
-          "regex_validation": "^[0-9]+$", "validation_message": "Must be a positive integer" }
-    ]
-}, {
-    "title": "Securities Debit/Credit Mapping",
-    "properties": [
-        { "name": "secuDebitCreditMapping", "label": "Transaction Type → D/C/N Mapping",
-          "type": "textfield",
-          "value": "BUY:D,PURCHASE:D,SELL:C,DISPOSE:C,DIVIDEND:C,COUPON:C,INTEREST:C,CUSTODY_FEE:D,SAFEKEEPING:D,FEE:D,TRANSFER_IN:N,TRANSFER_OUT:N,CORPORATE_ACTION:N",
-          "description": "Comma-separated TYPE:D/C/N pairs. Unmapped types default to N with exception queue entry" }
-    ]
-}]
-```
-
-**Property access in code:** `RowsEnricher.execute(Map properties)` receives all configured values. Access via `properties.get("baseCurrency")`. The `properties` map is passed to `TransactionDataLoader.loadData(dao, properties)` and `EnrichmentDataPersister.persistBatch(...)`, and to each pipeline step via `step.setProperties(properties)`.
-
-### 15.3 RowsEnricher.execute() — Updated Flow
-
-The `execute(Map properties)` method must be restructured per the spec. The current implementation has wrong step order, missing steps, and no StatusManager. The target flow:
-
-```
-1. Obtain FormDataDao via AppUtil.getApplicationContext().getBean("formDataDao")
-2. Instantiate StatusManager
-3. Create TransactionDataLoader, pass StatusManager
-4. Load transactions: dataLoader.loadData(dao, properties)
-5. Create DataPipeline with 6 steps in correct order (Appendix A)
-6. Pass properties to all steps via setProperties()
-7. Execute pipeline: pipeline.executeBatch(transactions)
-8. Create EnrichmentDataPersister, pass StatusManager
-9. Persist: persister.persistBatch(transactions, batchResult, dao, properties)
-10. Return summary string
-```
-
-**Key change from current code:** StatusManager must be instantiated once and shared with the loader, persister, and any steps that need it (via the properties map or constructor injection). It must NOT be instantiated per-record.
-
-### 15.4 Workflow Activity Mapping
-
-When mapping this plugin to a workflow tool activity in Joget App Designer:
-
-1. Open the workflow process in Joget App Designer
-2. Add or edit a **Tool** activity
-3. In the tool mapping, select **"Rows Enrichment"** from the plugin list
-4. Configure properties via the UI rendered from Section 15.2
-5. The plugin receives the configured properties in the `execute(Map properties)` call
-
-**No workflow variables are read or written** by this plugin. All input comes from database queries (CONSOLIDATED statements) and all output goes to database writes (F01.05 records, status transitions, exception queue, audit log). The return string is for logging/monitoring only.
+If **none** of these conditions are true and the transaction successfully passed all 6 pipeline steps, the record is marked Status.ENRICHED (fully auto-approved).
 
 ---
 
-## Appendix A: Current vs Target Pipeline Order
+## 17. Master Specification References
 
-| Current Order | Target Order | Change |
-|---|---|---|
-| 1. CurrencyValidation | 1. CurrencyValidation | No change |
-| 2. FXConversion | 2. CounterpartyDetermination | **Moved up** |
-| 3. CustomerIdentification | 3. CustomerIdentification | No change |
-| 4. CounterpartyDetermination | 4. AssetResolution | **NEW step** |
-| 5. F14RuleMapping | 5. F14RuleMapping | No change |
-| — | 6. FXConversion | **Moved to last** |
+This specification is part of a larger family of documents:
 
-**Rationale for moving FXConversion to last:**
-- FX conversion may optionally use `internal_type` to choose between different rate date strategies (trade date vs ex-date vs payment date for dividends)
-- Counterparty must be known before F14 rule matching
-- Asset resolution may inform F14 rules (asset-class-based rules)
-- Currency validation must happen first (FX needs valid currency)
+- **gam-framework-specification.md** — Defines the `Status` enum, `StatusManager` class, and entity lifecycle state machines used by all plugins
+- **F01.05-form-definition.md** — Complete field specification for the trxEnrichment form (52 fields, validation rules, visibility controls)
+- **F10.10-form-definition.md** — Transaction Type Master form (base types)
+- **F02.14-form-definition.md** — Counterparty Transaction Mapping form (40 rules, configurable matching logic)
+- **F02.15-form-definition.md** — Transaction Type GL Pattern form (31 internal types, GL posting patterns)
+- **MDM-design-document-v3.0.md** — Master Data Management architecture (currency, customer, counterparty, asset, FX rates)
 
-## Appendix B: Files To Modify
+All cross-references in this specification point to the forms and documents listed above.
 
-### B.1 Build Configuration
+---
 
-| File | Changes |
-|---|---|
-| `pom.xml` | **Add gam-framework dependency** (com.fiscaladmin.gam:gam-framework:8.1-SNAPSHOT). **Add mockito-core 4.11.0 test dependency** (see Section 14.1) |
-| `src/main/resources/properties/app/RowsEnricher.json` | **NEW file.** Joget property options JSON defining the configuration UI (see Section 15.2) |
+## 18. Implementation Status
 
-### B.2 Constants & Framework
+**Version 3.0 (this document):**
+- Full rewrite for metadata form consistency
+- F10.10 (transaction types), F02.14 (matching rules), F02.15 (GL patterns) integrated as source of truth
+- 6 manual review conditions explicitly documented
+- 52-field persister mapping complete and cross-referenced
+- Settlement days architecture extended for future per-type configuration
+- All internal type definitions reconciled across forms
 
-| File | Changes |
-|---|---|
-| `DomainConstants.java` | Fix TABLE_TRX_ENRICHMENT → "trxEnrichment", add TABLE_ASSET_MASTER = "asset_master" |
-| `FrameworkConstants.java` | **Major cleanup** — remove all status constants (replaced by `Status` enum from gam-framework), remove PIPELINE_VERSION, SYSTEM_USER. Keep only: STATUS_ACTIVE, ENTITY_UNKNOWN, ENTITY_SYSTEM, INTERNAL_TYPE_UNMATCHED (see Section 11.3) |
-| `DataStep.java` (interface) | Add `setProperties(Map<String, Object>)` method for config passing (see Section 11.4) |
-| `AbstractDataStep.java` | **Remove** hardcoded `STATUS_NEW`, `STATUS_ENRICHED`, `STATUS_FAILED`, `STATUS_POSTED` constants (lines 11-14). **Remove or rework** `updateTransactionStatus()` method — must not write status directly, use `StatusManager.transition()` instead. Implement default `setProperties()`, add `StatusManager` field and helper method for status transitions |
+**Remaining for implementation:**
+- Code translation from this specification
+- Unit test suite (Section 14 has comprehensive test plan)
+- Integration testing with real metadata forms
+- Verification that all 31 internal types in F02.15 are handled by gl-preparator
 
-### B.3 Pipeline Core
+---
 
-| File | Changes |
-|---|---|
-| `RowsEnricher.java` | Reorder steps (see Appendix A), add AssetResolutionStep, pass config properties to steps via `setProperties()`, instantiate `StatusManager`, **change `getPropertyOptions()`** to load from `/properties/app/RowsEnricher.json` (see Section 15.1). Restructure `execute()` per Section 15.3 |
-| `TransactionDataLoader.java` | Use `StatusManager` for BANK_TRX/SECU_TRX NEW→PROCESSING transitions. Ensure all F01.04 fields loaded. Replace status string literals with `Status` enum |
-| `DataContext.java` | No structural changes needed; additionalData map handles new fields |
-| `DataPipeline.java` | Pass properties map to steps after addStep() |
-
-### B.4 Pipeline Steps
-
-| File | Changes |
-|---|---|
-| `CurrencyValidationStep.java` | Implement `setProperties()`, use configurable properties, replace status string literals with `Status` enum |
-| `CounterpartyDeterminationStep.java` | Replace status string literals with `Status` enum. No logic changes |
-| `CustomerIdentificationStep.java` | **Change execution condition** to run for both bank and secu (remove sourceType=="bank" guard). Implement `setProperties()` for configurable confidence threshold. Replace status string literals |
-| `AssetResolutionStep.java` | **NEW file** — full implementation per Section 7.4 |
-| `F14RuleMappingStep.java` | Replace status string literals with `Status` enum. No logic changes |
-| `FXConversionStep.java` | Implement `setProperties()` for configurable MAX_RATE_AGE_DAYS. Replace status string literals |
-
-### B.5 Persistence
-
-| File | Changes |
-|---|---|
-| `EnrichmentDataPersister.java` | **Major rewrite.** Use `StatusManager` for all status transitions (ENRICHMENT, BANK_TRX, SECU_TRX, EXCEPTION entities). Implement complete 52-field mapping per Section 8.4. Implement Description Builder (Section 12.2). Implement configurable debit/credit mapping. Implement settlement_date T+N. Remove all dropped fields (Section 12.1). Remove manual audit writes for status changes (now auto via StatusManager) |
+**End of Specification**

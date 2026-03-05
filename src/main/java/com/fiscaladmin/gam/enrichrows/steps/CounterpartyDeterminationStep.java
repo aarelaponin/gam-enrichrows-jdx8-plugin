@@ -5,6 +5,8 @@ import com.fiscaladmin.gam.enrichrows.constants.FrameworkConstants;
 import com.fiscaladmin.gam.enrichrows.framework.AbstractDataStep;
 import com.fiscaladmin.gam.enrichrows.framework.StepResult;
 import com.fiscaladmin.gam.enrichrows.framework.DataContext;
+import com.fiscaladmin.gam.framework.status.EntityType;
+import com.fiscaladmin.gam.framework.status.Status;
 import org.joget.apps.form.dao.FormDataDao;
 import org.joget.apps.form.model.FormRow;
 import org.joget.apps.form.model.FormRowSet;
@@ -87,7 +89,7 @@ public class CounterpartyDeterminationStep extends AbstractDataStep {
 
                 // Create audit log
                 createAuditLog(context, formDataDao,
-                        "COUNTERPARTY_DETERMINED",
+                        DomainConstants.AUDIT_COUNTERPARTY_DETERMINED,
                         String.format("Counterparty identified: %s (Type: %s, BIC: %s)",
                                 counterpartyId, counterpartyType, counterpartyBic));
 
@@ -104,7 +106,7 @@ public class CounterpartyDeterminationStep extends AbstractDataStep {
                         "Counterparty not found for transaction: " + context.getTransactionId());
 
                 createCounterpartyException(context, formDataDao,
-                        "COUNTERPARTY_NOT_FOUND",
+                        DomainConstants.EXCEPTION_COUNTERPARTY_NOT_FOUND,
                         String.format("Could not determine counterparty. BIC: %s, Statement Bank: %s",
                                 counterpartyBic, context.getStatementBank()));
 
@@ -123,7 +125,7 @@ public class CounterpartyDeterminationStep extends AbstractDataStep {
                             context.getTransactionId());
 
             createCounterpartyException(context, formDataDao,
-                    "COUNTERPARTY_DETERMINATION_ERROR",
+                    DomainConstants.EXCEPTION_COUNTERPARTY_DETERMINATION_ERROR,
                     "Error during counterparty determination: " + e.getMessage());
 
             return new StepResult(false,
@@ -221,22 +223,12 @@ public class CounterpartyDeterminationStep extends AbstractDataStep {
             );
 
             if (counterpartyRows != null && !counterpartyRows.isEmpty()) {
-                LogUtil.info(CLASS_NAME, "Found " + counterpartyRows.size() + " counterparty records to search");
-                
+                LogUtil.debug(CLASS_NAME, "Searching " + counterpartyRows.size() + " counterparty records for BIC: " + bic);
+
                 for (FormRow row : counterpartyRows) {
-                    // Debug: Log all properties for first few records
-                    LogUtil.info(CLASS_NAME, String.format(
-                        "Checking counterparty record: id=%s, counterpartyId=%s, bankId=%s, counterpartyType=%s, isActive=%s",
-                        row.getId(), 
-                        row.getProperty("counterpartyId"),
-                        row.getProperty("bankId"),
-                        row.getProperty("counterpartyType"),
-                        row.getProperty("isActive")));
-                    
                     // Check if this counterparty is active
                     String isActive = row.getProperty("isActive");
                     if (!"true".equals(isActive)) {
-                        LogUtil.info(CLASS_NAME, "Skipping inactive counterparty: " + row.getId());
                         continue;  // Skip inactive counterparties
                     }
 
@@ -245,47 +237,36 @@ public class CounterpartyDeterminationStep extends AbstractDataStep {
                     // Based on counterparty type, check the appropriate ID field
                     if ("Bank".equals(counterpartyType)) {
                         String bankId = row.getProperty("bankId");
-                        LogUtil.info(CLASS_NAME, String.format(
-                            "Checking Bank type: bankId='%s' vs BIC='%s'", bankId, bic));
-                        
                         if (bic.equals(bankId)) {  // bankId stores the BIC code
                             String businessCounterpartyId = row.getProperty("counterpartyId");
                             LogUtil.info(CLASS_NAME,
-                                    "MATCH FOUND! Bank counterparty: " + businessCounterpartyId + " (record ID: " + row.getId() + ") for BIC: " + bic);
+                                    "Bank counterparty matched: " + businessCounterpartyId + " for BIC: " + bic);
                             return businessCounterpartyId;
                         }
                     } else if ("Custodian".equals(counterpartyType)) {
                         String custodianId = row.getProperty("custodianId");
-                        LogUtil.info(CLASS_NAME, String.format(
-                            "Checking Custodian type: custodianId='%s' vs BIC='%s'", custodianId, bic));
-                        
                         if (bic.equals(custodianId)) {  // custodianId stores the BIC code
                             String businessCounterpartyId = row.getProperty("counterpartyId");
                             LogUtil.info(CLASS_NAME,
-                                    "MATCH FOUND! Custodian counterparty: " + businessCounterpartyId + " (record ID: " + row.getId() + ") for BIC: " + bic);
+                                    "Custodian counterparty matched: " + businessCounterpartyId + " for BIC: " + bic);
                             return businessCounterpartyId;
                         }
                     } else if ("Broker".equals(counterpartyType)) {
                         String brokerId = row.getProperty("brokerId");
-                        LogUtil.info(CLASS_NAME, String.format(
-                            "Checking Broker type: brokerId='%s' vs BIC='%s'", brokerId, bic));
-                        
                         // For brokers, we might need to look up the broker's BIC separately
                         if (brokerMatchesBic(brokerId, bic, formDataDao)) {
                             String businessCounterpartyId = row.getProperty("counterpartyId");
                             LogUtil.info(CLASS_NAME,
-                                    "MATCH FOUND! Broker counterparty: " + businessCounterpartyId + " (record ID: " + row.getId() + ") for BIC: " + bic);
+                                    "Broker counterparty matched: " + businessCounterpartyId + " for BIC: " + bic);
                             return businessCounterpartyId;
                         }
-                    } else {
-                        LogUtil.info(CLASS_NAME, "Unknown counterparty type: " + counterpartyType);
                     }
                 }
             } else {
                 LogUtil.warn(CLASS_NAME, "No counterparty records found in table!");
             }
 
-            LogUtil.warn(CLASS_NAME, "No counterparty found for BIC: " + bic + " after checking all records");
+            LogUtil.warn(CLASS_NAME, "No counterparty found for BIC: " + bic);
 
         } catch (Exception e) {
             LogUtil.error(CLASS_NAME, e, "Error finding counterparty for BIC: " + bic);
@@ -301,7 +282,7 @@ public class CounterpartyDeterminationStep extends AbstractDataStep {
         try {
             FormRowSet bankRows = formDataDao.find(
                     null,
-                    "bank",  // Bank master table
+                    DomainConstants.TABLE_BANK,
                     null,
                     null,
                     null,
@@ -338,7 +319,7 @@ public class CounterpartyDeterminationStep extends AbstractDataStep {
             // Load broker record to check its BIC
             FormRowSet brokerRows = formDataDao.find(
                     null,
-                    "broker",  // Broker master table
+                    DomainConstants.TABLE_BROKER,
                     null,
                     null,
                     null,
@@ -368,29 +349,35 @@ public class CounterpartyDeterminationStep extends AbstractDataStep {
     }
 
     /**
-     * Determine the type of counterparty for securities transactions
-     * Based on transaction type, this could be a custodian or broker
+     * Determine the type of counterparty for securities transactions.
+     * Based on transaction type, this could be a custodian or broker.
+     * Supports both English and Estonian (LHV) transaction type values.
      */
     private String determineSecuritiesCounterpartyType(DataContext context) {
         String transactionType = context.getType();
-
-        if (transactionType != null) {
-            transactionType = transactionType.toUpperCase();
-
-            // Trading activities typically involve brokers
-            if (transactionType.contains("BUY") || transactionType.contains("SELL") ||
-                    transactionType.contains("TRADE")) {
-                return "Broker";
-            }
-
-            // Custody activities
-            if (transactionType.contains("CUSTODY") || transactionType.contains("SAFEKEEPING") ||
-                    transactionType.contains("DIVIDEND") || transactionType.contains("CORPORATE")) {
-                return "Custodian";
-            }
+        if (transactionType == null || transactionType.trim().isEmpty()) {
+            return "Custodian";
         }
 
-        // Default to Custodian for securities transactions
+        String upper = transactionType.trim().toUpperCase();
+
+        // Trading activities → Broker
+        // English: BUY, SELL, TRADE
+        // Estonian (LHV): ost (buy), müük (sell)
+        if (upper.contains("BUY") || upper.contains("SELL") || upper.contains("TRADE")
+                || upper.equals("OST") || upper.startsWith("MÜÜ")) {
+            return "Broker";
+        }
+
+        // Corporate actions → Custodian
+        // English: CUSTODY, SAFEKEEPING, DIVIDEND, CORPORATE
+        // Estonian (LHV): split+ (split in), split- (split out)
+        if (upper.contains("CUSTODY") || upper.contains("SAFEKEEPING")
+                || upper.contains("DIVIDEND") || upper.contains("CORPORATE")
+                || upper.startsWith("SPLIT")) {
+            return "Custodian";
+        }
+
         return "Custodian";
     }
 
@@ -405,7 +392,7 @@ public class CounterpartyDeterminationStep extends AbstractDataStep {
         try {
             FormRowSet bankRows = formDataDao.find(
                     null,
-                    "bank",
+                    DomainConstants.TABLE_BANK,
                     null,
                     null,
                     null,
@@ -442,23 +429,11 @@ public class CounterpartyDeterminationStep extends AbstractDataStep {
             context.setAdditionalData(additionalData);
         }
 
-        // DEBUG: Log what we're storing
-        LogUtil.info(CLASS_NAME, "=== DEBUG: STORING COUNTERPARTY IN CONTEXT ===");
-        LogUtil.info(CLASS_NAME, "Transaction ID: " + context.getTransactionId());
-        LogUtil.info(CLASS_NAME, "Counterparty ID being stored: '" + counterpartyId + "'");
-        LogUtil.info(CLASS_NAME, "Counterparty Type: '" + counterpartyType + "'");
-        LogUtil.info(CLASS_NAME, "Counterparty BIC: '" + counterpartyBic + "'");
-        LogUtil.info(CLASS_NAME, "Counterparty Name: '" + counterpartyName + "'");
-        
         // Store counterparty information for use in subsequent steps
         additionalData.put("counterparty_id", counterpartyId);
         additionalData.put("counterparty_type", counterpartyType);
         additionalData.put("counterparty_bic", counterpartyBic);
         additionalData.put("counterparty_name", counterpartyName);
-        
-        // DEBUG: Verify it was stored
-        LogUtil.info(CLASS_NAME, "Verifying storage - counterparty_id in additionalData: '" + additionalData.get("counterparty_id") + "'");
-        LogUtil.info(CLASS_NAME, "==============================================");
 
         // Also store the short code if available (used for GL account construction)
         String shortCode = getCounterpartyShortCode(counterpartyId, formDataDao);
@@ -540,8 +515,20 @@ public class CounterpartyDeterminationStep extends AbstractDataStep {
             String priority = calculateExceptionPriority(context, exceptionType);
             exceptionRow.setProperty("priority", priority);
 
+            // Set assignment based on priority
+            if ("critical".equals(priority) || "high".equals(priority)) {
+                exceptionRow.setProperty("assigned_to", "supervisor");
+                exceptionRow.setProperty("due_date", calculateDueDate(1));
+            } else if ("medium".equals(priority)) {
+                exceptionRow.setProperty("assigned_to", "operations");
+                exceptionRow.setProperty("due_date", calculateDueDate(3));
+            } else {
+                exceptionRow.setProperty("assigned_to", "operations");
+                exceptionRow.setProperty("due_date", calculateDueDate(7));
+            }
+
             // Set status
-            exceptionRow.setProperty("status", FrameworkConstants.STATUS_PENDING);
+            exceptionRow.setProperty("status", Status.OPEN.getCode());
 
             // Additional context for resolution
             if (DomainConstants.SOURCE_TYPE_BANK.equals(context.getSourceType())) {
@@ -560,6 +547,15 @@ public class CounterpartyDeterminationStep extends AbstractDataStep {
             rowSet.add(exceptionRow);
             formDataDao.saveOrUpdate(null, DomainConstants.TABLE_EXCEPTION_QUEUE, rowSet);
 
+            if (statusManager != null) {
+                try {
+                    statusManager.transition(formDataDao, EntityType.EXCEPTION, exceptionId,
+                            Status.OPEN, "rows-enrichment", exceptionDetails);
+                } catch (Exception e) {
+                    LogUtil.warn(CLASS_NAME, "Could not transition exception status: " + e.getMessage());
+                }
+            }
+
             LogUtil.info(CLASS_NAME,
                     String.format("Created counterparty exception for transaction %s: Type=%s",
                             context.getTransactionId(), exceptionType));
@@ -569,6 +565,15 @@ public class CounterpartyDeterminationStep extends AbstractDataStep {
                     "Error creating counterparty exception for transaction: " +
                             context.getTransactionId());
         }
+    }
+
+    /**
+     * Calculate due date based on number of days
+     */
+    private String calculateDueDate(int days) {
+        Calendar cal = Calendar.getInstance();
+        cal.add(Calendar.DAY_OF_MONTH, days);
+        return new java.text.SimpleDateFormat("yyyy-MM-dd").format(cal.getTime());
     }
 
     /**

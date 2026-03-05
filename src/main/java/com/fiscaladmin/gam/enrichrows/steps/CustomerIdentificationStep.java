@@ -5,6 +5,8 @@ import com.fiscaladmin.gam.enrichrows.constants.FrameworkConstants;
 import com.fiscaladmin.gam.enrichrows.framework.AbstractDataStep;
 import com.fiscaladmin.gam.enrichrows.framework.StepResult;
 import com.fiscaladmin.gam.enrichrows.framework.DataContext;
+import com.fiscaladmin.gam.framework.status.EntityType;
+import com.fiscaladmin.gam.framework.status.Status;
 import org.joget.apps.form.dao.FormDataDao;
 import org.joget.apps.form.model.FormRow;
 import org.joget.apps.form.model.FormRowSet;
@@ -35,10 +37,26 @@ public class CustomerIdentificationStep extends AbstractDataStep {
     private static final int CONFIDENCE_REGISTRATION_NUMBER = 90;
     private static final int CONFIDENCE_NAME_MATCH = 70;
     private static final int CONFIDENCE_UNKNOWN = 0;
+    private static final int DEFAULT_CONFIDENCE_THRESHOLD_HIGH = 80;
 
     @Override
     public String getStepName() {
         return "Customer Identification";
+    }
+
+    /**
+     * Get the high confidence threshold from properties, falling back to default.
+     */
+    private int getConfidenceThresholdHigh() {
+        Object value = getProperty("confidenceThresholdHigh", DEFAULT_CONFIDENCE_THRESHOLD_HIGH);
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        try {
+            return Integer.parseInt(value.toString());
+        } catch (NumberFormatException e) {
+            return DEFAULT_CONFIDENCE_THRESHOLD_HIGH;
+        }
     }
 
     @Override
@@ -105,14 +123,13 @@ public class CustomerIdentificationStep extends AbstractDataStep {
                     customerName = customerRow.getProperty("name");
                     customerCode = customerRow.getProperty("customer_code");
 
-                    // Verify customer is active
-                    String status = customerRow.getProperty("status");
-                    if (!FrameworkConstants.STATUS_ACTIVE.equalsIgnoreCase(status)) {
-                        LogUtil.warn(CLASS_NAME, "Customer " + customerId + " is not active");
-                        // Create exception for inactive customer
+                    // §4.0b: Verify customer KYC is completed
+                    String kycStatus = customerRow.getProperty("kycStatus");
+                    if (!"completed".equalsIgnoreCase(kycStatus)) {
+                        LogUtil.warn(CLASS_NAME, "Customer " + customerId + " KYC not completed: " + kycStatus);
                         createCustomerException(context, formDataDao,
-                                "INACTIVE_CUSTOMER",
-                                String.format("Customer %s is inactive", customerId),
+                                DomainConstants.EXCEPTION_INACTIVE_CUSTOMER,
+                                String.format("Customer %s KYC status: %s (expected: completed)", customerId, kycStatus),
                                 "high");
                     }
                 }
@@ -143,9 +160,9 @@ public class CustomerIdentificationStep extends AbstractDataStep {
                                 context.getTransactionId(), customerId, confidenceLevel));
 
                 // If confidence is low, create a warning exception
-                if (confidenceLevel < 80) {
+                if (confidenceLevel < getConfidenceThresholdHigh()) {
                     createCustomerException(context, formDataDao,
-                            "LOW_CONFIDENCE_IDENTIFICATION",
+                            DomainConstants.EXCEPTION_LOW_CONFIDENCE,
                             String.format("Customer identified with low confidence (%d%%) using %s method",
                                     confidenceLevel, identificationMethod),
                             "low");
@@ -186,7 +203,7 @@ public class CustomerIdentificationStep extends AbstractDataStep {
                             context.getTransactionId());
 
             createCustomerException(context, formDataDao,
-                    "CUSTOMER_IDENTIFICATION_ERROR",
+                    DomainConstants.EXCEPTION_CUSTOMER_IDENTIFICATION_ERROR,
                     "Error during customer identification: " + e.getMessage(),
                     "high");
 
@@ -197,58 +214,52 @@ public class CustomerIdentificationStep extends AbstractDataStep {
 
     @Override
     public boolean shouldExecute(DataContext context) {
-        // Only execute for bank transactions that haven't failed yet
-        // Securities transactions don't have individual customers (they are bank's own portfolio operations)
-        if (!DomainConstants.SOURCE_TYPE_BANK.equals(context.getSourceType())) {
-            LogUtil.info(CLASS_NAME, "Skipping customer identification for securities transaction: " + 
-                        context.getTransactionId() + " (securities are bank portfolio operations)");
+        // Bank only: secu transactions have no customer data (investment bank acts on behalf of customers).
+        // Customer-to-portfolio allocation for secu is a manual operations process.
+        if (!"bank".equals(context.getSourceType())) {
             return false;
         }
-        
-        // Execute for bank transactions that haven't failed yet
+        // §4.0a: Securities-related bank transactions skip customer identification
+        // (customer will be resolved during cross-statement pairing with secu side)
+        if (isSecuritiesRelatedBankTransaction(context)) {
+            return false;
+        }
         return context.getErrorMessage() == null || context.getErrorMessage().isEmpty();
     }
 
     /**
+     * §4.0a: Check if a bank transaction is securities-related based on payment description.
+     * These transactions skip customer identification because the customer will be
+     * resolved during cross-statement pairing with the securities side.
+     */
+    private boolean isSecuritiesRelatedBankTransaction(DataContext context) {
+        String description = context.getPaymentDescription();
+        if (description == null) return false;
+        String lower = description.toLowerCase();
+        return lower.startsWith("securities buy")
+                || lower.startsWith("securities sell")
+                || lower.startsWith("securities commission")
+                || lower.startsWith("dividends")
+                || lower.startsWith("income tax withheld");
+    }
+
+    /**
      * Method 1: Identify customer by direct ID field
-     * The customer_id field may contain:
-     * - Actual customer ID (CUST-XXXXXX format)
-     * - Registration number (for companies)
-     * - Personal ID (for individuals)
+     * The customer_id field from bank CSV (Isikukood või registrikood) always contains
+     * a registrationNumber (8-digit, for companies) or personalId (11-digit, for individuals).
+     * It never contains an internal customer ID format.
      */
     private String identifyByDirectId(DataContext context, FormDataDao formDataDao) {
         String customerIdField = context.getCustomerId();
-
         if (customerIdField == null || customerIdField.trim().isEmpty()) {
             LogUtil.info(CLASS_NAME, "No customer_id field value for transaction: " + context.getTransactionId());
             return null;
         }
-
         customerIdField = customerIdField.trim();
         LogUtil.info(CLASS_NAME, "Transaction " + context.getTransactionId() + " - Checking customer ID field: " + customerIdField);
 
-        // First check if it's an actual customer ID (CUST-XXXXXX format or similar)
-        if (customerIdField.startsWith("CUST-") || customerIdField.matches("^[A-Z]+-\\d+$")) {
-            // This looks like an actual customer ID
-            if (customerExists(customerIdField, formDataDao)) {
-                LogUtil.info(CLASS_NAME, "Transaction " + context.getTransactionId() + " - Found customer by direct ID: " + customerIdField);
-                return customerIdField;
-            } else {
-                LogUtil.warn(CLASS_NAME, "Transaction " + context.getTransactionId() + " - Customer ID not found in database: " + customerIdField);
-                return null;
-            }
-        }
-        
-        // Not a customer ID format, try as registration number or personal ID
-        String customerId = findCustomerByRegistrationOrPersonalId(customerIdField, formDataDao);
-        if (customerId != null) {
-            LogUtil.info(CLASS_NAME,
-                    "Transaction " + context.getTransactionId() + " - Found customer by registration/personal ID: " + customerId);
-            return customerId;
-        }
-
-        LogUtil.warn(CLASS_NAME, "Transaction " + context.getTransactionId() + " - Customer not found for ID field: " + customerIdField);
-        return null;
+        // Bank CSV "Isikukood või registrikood" is always registrationNumber or personalId
+        return findCustomerByRegistrationOrPersonalId(customerIdField, formDataDao);
     }
 
     /**
@@ -338,19 +349,28 @@ public class CustomerIdentificationStep extends AbstractDataStep {
     }
 
     /**
-     * Method 2: Identify customer by account number
+     * Method 2: Identify customer by account number (bank transactions only)
+     *
+     * Resolution chain:
+     * 1. Get account_number from bank transaction (IBAN from CSV "Kliendi konto")
+     * 2. Find matching account in customer_account table by accountNumber
+     * 3. Follow business key chain: corporateCustomerId -> customer.registrationNumber
+     *    or individualCustomerId -> customer.personalId
+     *
+     * Note: secu transactions have no account_number — customer allocation for
+     * securities is a manual process (investment bank acts on behalf of customers).
      */
     private String identifyByAccountNumber(DataContext context, FormDataDao formDataDao) {
-        String accountNumber = null;
-
-        if ("bank".equals(context.getSourceType())) {
-            // For bank transactions, use the account number from transaction
-            FormRow trxRow = context.getTransactionRow();
-            if (trxRow != null) {
-                accountNumber = trxRow.getProperty("account_number");
-            }
+        if (!"bank".equals(context.getSourceType())) {
+            return null;
         }
 
+        FormRow trxRow = context.getTransactionRow();
+        if (trxRow == null) {
+            return null;
+        }
+
+        String accountNumber = trxRow.getProperty("account_number");
         if (accountNumber == null || accountNumber.trim().isEmpty()) {
             return null;
         }
@@ -359,16 +379,10 @@ public class CustomerIdentificationStep extends AbstractDataStep {
         LogUtil.info(CLASS_NAME, "Looking up customer by account number: " + accountNumber);
 
         try {
-            // Search in customer_account table for account number
             FormRowSet accountRows = formDataDao.find(
                     null,
-                    "customer_account",  // Customer account mapping table
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null
+                    DomainConstants.TABLE_CUSTOMER_ACCOUNT,
+                    null, null, null, null, null, null
             );
 
             if (accountRows != null && !accountRows.isEmpty()) {
@@ -377,12 +391,16 @@ public class CustomerIdentificationStep extends AbstractDataStep {
                     String accStatus = row.getProperty("status");
 
                     if (accountNumber.equals(accNumber) && "active".equalsIgnoreCase(accStatus)) {
-                        String customerId = row.getProperty("customer_id");
-                        if (customerId != null && !customerId.trim().isEmpty()) {
-                            LogUtil.info(CLASS_NAME,
-                                    "Found customer by account number: " + customerId);
+                        LogUtil.info(CLASS_NAME, "Found matching account: " + accNumber);
+
+                        // Resolve customer via business key chain
+                        String customerId = resolveCustomerFromAccount(row, formDataDao);
+                        if (customerId != null) {
                             return customerId;
                         }
+
+                        LogUtil.warn(CLASS_NAME,
+                                "Account found but no customer reference (corporateCustomerId/individualCustomerId) for: " + accNumber);
                     }
                 }
             }
@@ -415,6 +433,41 @@ public class CustomerIdentificationStep extends AbstractDataStep {
 
         } catch (Exception e) {
             LogUtil.error(CLASS_NAME, e, "Error searching by account number: " + accountNumber);
+        }
+
+        return null;
+    }
+
+    /**
+     * Resolve customer from a customer_account row using business key chain:
+     * corporateCustomerId -> customer.registrationNumber
+     * individualCustomerId -> customer.personalId
+     */
+    private String resolveCustomerFromAccount(FormRow accountRow, FormDataDao formDataDao) {
+        // Corporate accounts: corporateCustomerId = registrationNumber
+        String corpId = accountRow.getProperty("corporateCustomerId");
+        if (corpId != null && !corpId.trim().isEmpty()) {
+            LogUtil.info(CLASS_NAME,
+                    "Account has corporateCustomerId: " + corpId + ", searching by registrationNumber");
+            String resolved = findCustomerByRegistrationOrPersonalId(corpId, formDataDao);
+            if (resolved != null) {
+                LogUtil.info(CLASS_NAME,
+                        "Resolved customer via corporateCustomerId -> registrationNumber: " + resolved);
+                return resolved;
+            }
+        }
+
+        // Individual accounts: individualCustomerId = personalId
+        String indivId = accountRow.getProperty("individualCustomerId");
+        if (indivId != null && !indivId.trim().isEmpty()) {
+            LogUtil.info(CLASS_NAME,
+                    "Account has individualCustomerId: " + indivId + ", searching by personalId");
+            String resolved = findCustomerByRegistrationOrPersonalId(indivId, formDataDao);
+            if (resolved != null) {
+                LogUtil.info(CLASS_NAME,
+                        "Resolved customer via individualCustomerId -> personalId: " + resolved);
+                return resolved;
+            }
         }
 
         return null;
@@ -708,7 +761,7 @@ public class CustomerIdentificationStep extends AbstractDataStep {
             exceptionRow.setProperty("priority", priority);
 
             // Set status
-            exceptionRow.setProperty("status", FrameworkConstants.STATUS_PENDING);
+            exceptionRow.setProperty("status", Status.OPEN.getCode());
 
             // Additional context for resolution
             if ("bank".equals(context.getSourceType())) {
@@ -737,6 +790,15 @@ public class CustomerIdentificationStep extends AbstractDataStep {
             FormRowSet rowSet = new FormRowSet();
             rowSet.add(exceptionRow);
             formDataDao.saveOrUpdate(null, DomainConstants.TABLE_EXCEPTION_QUEUE, rowSet);
+
+            if (statusManager != null) {
+                try {
+                    statusManager.transition(formDataDao, EntityType.EXCEPTION, exceptionId,
+                            Status.OPEN, "rows-enrichment", exceptionDetails);
+                } catch (Exception e) {
+                    LogUtil.warn(CLASS_NAME, "Could not transition exception status: " + e.getMessage());
+                }
+            }
 
             LogUtil.info(CLASS_NAME,
                     String.format("Created customer exception for transaction %s: Type=%s, Priority=%s",
