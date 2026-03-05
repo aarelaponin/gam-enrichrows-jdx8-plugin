@@ -28,6 +28,7 @@ public final class DomainConstants {
     public static final String TABLE_CUSTOMER_ACCOUNT = "customer_account";
     public static final String TABLE_BANK = "bank";
     public static final String TABLE_BROKER = "broker";
+    public static final String TABLE_LOAN_MASTER = "loan_master";
 
     // =====================================================
     // Processing Tables (GL specific)

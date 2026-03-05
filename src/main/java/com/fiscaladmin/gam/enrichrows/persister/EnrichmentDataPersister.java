@@ -208,6 +208,14 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
         }
         // 46-47: fee_trx_id, pair_id = NULL
 
+        // ===== LOAN RESOLUTION (2 fields) =====
+        String loanId = getStringValue(data.get("loan_id"));
+        String loanDirection = getStringValue(data.get("loan_direction"));
+        if (loanId != null && !loanId.isEmpty()) {
+            setPropertySafe(row, "loan_id", loanId);
+            setPropertySafe(row, "loan_direction", loanDirection);
+        }
+
         // ===== STATUS & NOTES (5 fields) =====
         // 48: status — handled by StatusManager transitions, not set here
         setPropertySafe(row, "enrichment_timestamp", TIMESTAMP_FORMAT.format(new Date()));  // 49
