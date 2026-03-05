@@ -88,9 +88,20 @@ To add a new step:
 
 ### Common Development Tasks
 
+**F14 Rule Matching — Secondary Conditions:**
+
+Rules in `cp_txn_mapping` support optional secondary conditions for AND logic. When a rule has `secondaryField`, `secondaryOperator`, and `secondaryValue` populated, both the primary and secondary conditions must match. When empty, the rule behaves as a single-field match (backward compatible).
+
+Example: The word "intress" (interest) appears in both incoming (C) and outgoing (D) bank transactions. A single rule `payment_description contains "intress"` cannot distinguish direction. With secondary conditions:
+- Rule 1: `payment_description contains "intress"` AND `d_c equals C` → INT_INCOME
+- Rule 2: `payment_description contains "intress"` AND `d_c equals D` → INT_EXPENSE
+
+Secondary conditions use the same operators as primary conditions (equals, contains, startsWith, etc.) and respect the same `caseSensitive` flag.
+
 **Debugging F14 Rule Issues:**
 - Check `cp_txn_mapping` table for rule configuration
 - Verify `counterpartyId` values match between `counterparty_master` and `cp_txn_mapping`
+- Secondary condition fields: `c_secondaryField`, `c_secondaryOperator`, `c_secondaryValue` in MySQL
 - Use debug JAR with extensive logging (see DEBUG_GUIDE.md)
 
 **Database Queries for Troubleshooting:**

@@ -5,6 +5,8 @@ import com.fiscaladmin.gam.enrichrows.constants.FrameworkConstants;
 import com.fiscaladmin.gam.enrichrows.framework.AbstractDataStep;
 import com.fiscaladmin.gam.enrichrows.framework.StepResult;
 import com.fiscaladmin.gam.enrichrows.framework.DataContext;
+import com.fiscaladmin.gam.framework.status.EntityType;
+import com.fiscaladmin.gam.framework.status.Status;
 import org.joget.apps.form.dao.FormDataDao;
 import org.joget.apps.form.model.FormRow;
 import org.joget.apps.form.model.FormRowSet;
@@ -33,7 +35,7 @@ public class F14RuleMappingStep extends AbstractDataStep {
     private static final String CLASS_NAME = F14RuleMappingStep.class.getName();
 
     // Table name for F14 matching rules
-    private static final String TABLE_CP_TXN_MAPPING = "cp_txn_mapping";
+    private static final String TABLE_CP_TXN_MAPPING = DomainConstants.TABLE_CP_TXN_MAPPING;
 
     // Special counterparty ID for universal rules
     private static final String SYSTEM_COUNTERPARTY = FrameworkConstants.ENTITY_SYSTEM;
@@ -145,7 +147,7 @@ public class F14RuleMappingStep extends AbstractDataStep {
                             context.getTransactionId());
 
             createF14Exception(context, formDataDao,
-                    "F14_MAPPING_ERROR",
+                    DomainConstants.EXCEPTION_F14_MAPPING_ERROR,
                     "Error during F14 rule mapping: " + e.getMessage(),
                     "high");
 
@@ -166,27 +168,17 @@ public class F14RuleMappingStep extends AbstractDataStep {
      * Get counterparty ID from context (set by Step 3)
      */
     private String getCounterpartyIdFromContext(DataContext context) {
-        LogUtil.info(CLASS_NAME, "=== DEBUG: RETRIEVING COUNTERPARTY FROM CONTEXT ===");
-        LogUtil.info(CLASS_NAME, "Transaction ID: " + context.getTransactionId());
-        
+        LogUtil.debug(CLASS_NAME, "Retrieving counterparty from context for transaction: " + context.getTransactionId());
+
         Map<String, Object> additionalData = context.getAdditionalData();
         if (additionalData != null) {
-            LogUtil.info(CLASS_NAME, "additionalData is NOT null");
-            LogUtil.info(CLASS_NAME, "additionalData contents: " + additionalData.toString());
-            
             Object cpId = additionalData.get("counterparty_id");
             if (cpId != null) {
-                LogUtil.info(CLASS_NAME, "Found counterparty_id: '" + cpId.toString() + "'");
-                LogUtil.info(CLASS_NAME, "====================================================");
+                LogUtil.debug(CLASS_NAME, "Found counterparty_id: '" + cpId.toString() + "'");
                 return cpId.toString();
-            } else {
-                LogUtil.info(CLASS_NAME, "counterparty_id is NULL in additionalData!");
             }
-        } else {
-            LogUtil.info(CLASS_NAME, "additionalData is NULL!");
         }
-        LogUtil.info(CLASS_NAME, "Returning NULL counterparty_id");
-        LogUtil.info(CLASS_NAME, "====================================================");
+        LogUtil.debug(CLASS_NAME, "No counterparty_id found in context");
         return null;
     }
 
@@ -211,51 +203,36 @@ public class F14RuleMappingStep extends AbstractDataStep {
                     null
             );
 
-            LogUtil.info(CLASS_NAME, "=== DEBUG: F14 RULES LOADING ===");
-            LogUtil.info(CLASS_NAME, "Looking for rules matching counterpartyId: '" + counterpartyId + "' and sourceType: '" + sourceType + "'");
-            
+            LogUtil.debug(CLASS_NAME, "Loading F14 rules for counterpartyId: '" + counterpartyId + "', sourceType: '" + sourceType + "'");
+
             if (allRules != null && !allRules.isEmpty()) {
-                LogUtil.info(CLASS_NAME, "Total rules in cp_txn_mapping table: " + allRules.size());
+                LogUtil.debug(CLASS_NAME, "Total rules in cp_txn_mapping table: " + allRules.size());
                 // Filter for applicable rules
                 for (FormRow rule : allRules) {
                     String ruleSourceType = rule.getProperty("sourceType");
                     String ruleCounterpartyId = rule.getProperty("counterpartyId");
                     String status = rule.getProperty("status");
 
-                    LogUtil.info(CLASS_NAME, String.format(
-                        "Checking rule: id=%s, sourceType='%s', counterpartyId='%s', status='%s'",
-                        rule.getId(), ruleSourceType, ruleCounterpartyId, status));
-
                     // Check if rule is active
                     if (!FrameworkConstants.STATUS_ACTIVE_CAPITAL.equalsIgnoreCase(status) && !FrameworkConstants.STATUS_ACTIVE.equalsIgnoreCase(status)) {
-                        LogUtil.info(CLASS_NAME, "  -> Skipped: not active");
                         continue;
                     }
 
                     // Check source type matches
                     if (!sourceType.equals(ruleSourceType)) {
-                        LogUtil.info(CLASS_NAME, "  -> Skipped: source type mismatch");
                         continue;
                     }
 
                     // Check if rule applies to this counterparty
                     if (counterpartyId.equals(ruleCounterpartyId) ||
                             SYSTEM_COUNTERPARTY.equals(ruleCounterpartyId)) {
-                        
-                        LogUtil.info(CLASS_NAME, String.format(
-                            "Rule %s matches counterparty: rule_cp='%s', current_cp='%s', source='%s'",
-                            rule.getId(), ruleCounterpartyId, counterpartyId, sourceType));
 
                         // Check effective date if specified
                         if (isRuleEffective(rule)) {
                             applicableRules.add(rule);
-                            LogUtil.info(CLASS_NAME, "Added rule to applicable list: " + 
+                            LogUtil.debug(CLASS_NAME, "Added rule: " +
                                 rule.getProperty("mappingName") + " (priority: " + rule.getProperty("priority") + ")");
                         }
-                    } else {
-                        LogUtil.debug(CLASS_NAME, String.format(
-                            "Rule %s skipped: rule_cp='%s' doesn't match current_cp='%s'",
-                            rule.getId(), ruleCounterpartyId, counterpartyId));
                     }
                 }
             }
@@ -325,7 +302,7 @@ public class F14RuleMappingStep extends AbstractDataStep {
             String matchValue = rule.getProperty("matchValue");
             String caseSensitive = rule.getProperty("caseSensitive");
             
-            LogUtil.info(CLASS_NAME, String.format(
+            LogUtil.debug(CLASS_NAME, String.format(
                 "Evaluating rule: field='%s', operator='%s', value='%s', caseSensitive='%s'",
                 matchingField, matchOperator, matchValue, caseSensitive));
 
@@ -336,12 +313,8 @@ public class F14RuleMappingStep extends AbstractDataStep {
 
             // Get the field value from transaction
             String fieldValue = getFieldValue(matchingField, context);
-            LogUtil.info(CLASS_NAME, String.format(
-                "Field value from transaction: field='%s', value='%s'",
-                matchingField, fieldValue));
-                
             if (fieldValue == null) {
-                LogUtil.info(CLASS_NAME, "Field value is null, rule does not match");
+                LogUtil.debug(CLASS_NAME, "Field value is null for field: " + matchingField);
                 return false;
             }
 
@@ -351,23 +324,41 @@ public class F14RuleMappingStep extends AbstractDataStep {
             if (!isCaseSensitive) {
                 fieldValue = fieldValue.toUpperCase();
                 matchValue = matchValue != null ? matchValue.toUpperCase() : "";
-                LogUtil.info(CLASS_NAME, String.format(
-                    "After case conversion: fieldValue='%s', matchValue='%s'",
-                    fieldValue, matchValue));
             }
 
             // Evaluate based on operator
             boolean matches = evaluateOperator(fieldValue, matchOperator, matchValue);
-            LogUtil.info(CLASS_NAME, String.format(
-                "Operator evaluation: operator='%s', result=%s",
-                matchOperator, matches));
+
+            // Check secondary condition if primary matched
+            if (matches) {
+                String secondaryField = rule.getProperty("secondaryField");
+                String secondaryOperator = rule.getProperty("secondaryOperator");
+                String secondaryValue = rule.getProperty("secondaryValue");
+
+                if (secondaryField != null && !secondaryField.trim().isEmpty()) {
+                    String secondaryFieldValue = getFieldValue(secondaryField, context);
+                    if (secondaryFieldValue == null) {
+                        matches = false;
+                    } else {
+                        if (!isCaseSensitive) {
+                            secondaryFieldValue = secondaryFieldValue.toUpperCase();
+                            secondaryValue = secondaryValue != null ? secondaryValue.toUpperCase() : "";
+                        }
+                        matches = evaluateOperator(secondaryFieldValue, secondaryOperator, secondaryValue);
+                    }
+
+                    LogUtil.debug(CLASS_NAME, String.format(
+                        "Secondary condition: field='%s', operator='%s', value='%s', result=%s",
+                        secondaryField, secondaryOperator, secondaryValue, matches));
+                }
+            }
 
             // Check arithmetic conditions if field matching passed
             if (matches) {
                 String arithmeticCondition = rule.getProperty("arithmeticCondition");
                 if (arithmeticCondition != null && !arithmeticCondition.trim().isEmpty()) {
                     matches = evaluateArithmeticCondition(arithmeticCondition, context);
-                    LogUtil.info(CLASS_NAME, String.format(
+                    LogUtil.debug(CLASS_NAME, String.format(
                         "Arithmetic condition: '%s', result=%s",
                         arithmeticCondition, matches));
                 }
@@ -656,7 +647,7 @@ public class F14RuleMappingStep extends AbstractDataStep {
         String counterpartyId = getCounterpartyIdFromContext(context);
         
         createF14Exception(context, formDataDao,
-                "NO_F14_RULES",
+                DomainConstants.EXCEPTION_NO_F14_RULES,
                 String.format("No F14 rules configured for counterparty '%s' and transaction type '%s'",
                              counterpartyId != null ? counterpartyId : "UNKNOWN",
                              context.getSourceType()),
@@ -700,7 +691,7 @@ public class F14RuleMappingStep extends AbstractDataStep {
         }
 
         createF14Exception(context, formDataDao,
-                "NO_RULE_MATCH",
+                DomainConstants.EXCEPTION_NO_RULE_MATCH,
                 details.toString(),
                 "medium");
 
@@ -746,7 +737,7 @@ public class F14RuleMappingStep extends AbstractDataStep {
             setPropertySafe(exceptionRow, "priority", priority);
 
             // Set status
-            setPropertySafe(exceptionRow, "status", FrameworkConstants.STATUS_PENDING);
+            setPropertySafe(exceptionRow, "status", Status.OPEN.getCode());
 
             // Additional context for manual rule creation
             String counterpartyId = getCounterpartyIdFromContext(context);
@@ -775,6 +766,15 @@ public class F14RuleMappingStep extends AbstractDataStep {
             FormRowSet rowSet = new FormRowSet();
             rowSet.add(exceptionRow);
             formDataDao.saveOrUpdate(null, DomainConstants.TABLE_EXCEPTION_QUEUE, rowSet);
+
+            if (statusManager != null) {
+                try {
+                    statusManager.transition(formDataDao, EntityType.EXCEPTION, exceptionId,
+                            Status.OPEN, "rows-enrichment", exceptionDetails);
+                } catch (Exception e) {
+                    LogUtil.warn(CLASS_NAME, "Could not transition exception status: " + e.getMessage());
+                }
+            }
 
             LogUtil.info(CLASS_NAME,
                     String.format("Created F14 exception for transaction %s: Type=%s, Priority=%s",
@@ -841,11 +841,9 @@ public class F14RuleMappingStep extends AbstractDataStep {
     }
     
     /**
-     * Check if this is likely the last transaction (heuristic)
+     * Check if this is the last transaction in the batch
      */
     private boolean isLastTransaction() {
-        // This is a simple heuristic - in a real implementation,
-        // you might pass the total count from the pipeline
-        return false;
+        return isLastInBatch();
     }
 }
