@@ -223,6 +223,14 @@ public class FXConversionStep extends AbstractDataStep {
 
     @Override
     public boolean shouldExecute(DataContext context) {
+        // §9b: Skip if base_amount is already set and non-zero
+        Object baseAmountObj = context.getAdditionalDataValue("base_amount");
+        if (baseAmountObj != null) {
+            try {
+                double val = Double.parseDouble(baseAmountObj.toString().trim());
+                if (val != 0.0) return false;
+            } catch (NumberFormatException ignored) {}
+        }
         // Execute for all transactions that haven't failed yet
         return context.getErrorMessage() == null || context.getErrorMessage().isEmpty();
     }

@@ -1,6 +1,7 @@
 package com.fiscaladmin.gam.enrichrows.loader;
 
 import com.fiscaladmin.gam.enrichrows.constants.DomainConstants;
+import com.fiscaladmin.gam.enrichrows.constants.FrameworkConstants;
 import com.fiscaladmin.gam.enrichrows.framework.DataContext;
 import com.fiscaladmin.gam.enrichrows.helpers.TestDataFactory;
 import com.fiscaladmin.gam.framework.status.Status;
@@ -31,17 +32,19 @@ public class TransactionDataLoaderTest {
     }
 
     @Test
-    public void testConsolidatedStatementsFiltered() {
-        // Create statements: one consolidated, one with different status
+    public void testConsolidatedAndEnrichedStatementsIncluded() {
+        // Both consolidated and enriched statements should be included
         FormRow consolidated = TestDataFactory.statementRow("STMT-001", DomainConstants.SOURCE_TYPE_BANK);
         consolidated.setProperty("status", Status.CONSOLIDATED.getCode());
 
         FormRow enriched = TestDataFactory.statementRow("STMT-002", DomainConstants.SOURCE_TYPE_BANK);
         enriched.setProperty("status", Status.ENRICHED.getCode());
 
-        FormRowSet statements = TestDataFactory.rowSet(consolidated, enriched);
+        FormRow posted = TestDataFactory.statementRow("STMT-003", DomainConstants.SOURCE_TYPE_BANK);
+        posted.setProperty("status", Status.POSTED.getCode());
 
-        // Return statements when queried
+        FormRowSet statements = TestDataFactory.rowSet(consolidated, enriched, posted);
+
         when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_STATEMENT),
                 isNull(), isNull(), eq("from_date"), eq(false), eq(0), eq(100)))
                 .thenReturn(statements);
@@ -51,22 +54,16 @@ public class TransactionDataLoaderTest {
                 isNull(), isNull(), eq("payment_date"), eq(false), eq(0), eq(10000)))
                 .thenReturn(TestDataFactory.emptyRowSet());
 
-        // Validate data source
-        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_STATEMENT),
-                isNull(), isNull(), isNull(), eq(false), eq(0), eq(1)))
-                .thenReturn(TestDataFactory.emptyRowSet());
-        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
-                isNull(), isNull(), isNull(), eq(false), eq(0), eq(1)))
-                .thenReturn(TestDataFactory.emptyRowSet());
-        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_SECU_TOTAL_TRX),
-                isNull(), isNull(), isNull(), eq(false), eq(0), eq(1)))
-                .thenReturn(TestDataFactory.emptyRowSet());
+        wireValidationMocks();
 
         List<DataContext> result = loader.loadData(mockDao, new HashMap<>());
 
-        // Only consolidated statement should be processed (STMT-001)
-        // No transactions returned since we returned empty bank transactions
+        // CONSOLIDATED and ENRICHED included, POSTED excluded
+        // No transactions returned since bank trx rows are empty
         assertEquals(0, result.size());
+        // Verify bank trx fetch was called twice (once for each enrichable statement)
+        verify(mockDao, times(2)).find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                isNull(), isNull(), eq("payment_date"), eq(false), eq(0), eq(10000));
     }
 
     @Test
@@ -277,5 +274,300 @@ public class TransactionDataLoaderTest {
         assertEquals(1, result.size());
         DataContext ctx = result.get(0);
         assertEquals("DE89370400440532013000", ctx.getOtherSideAccount());
+    }
+
+    // ===== Re-enrichment Tests =====
+
+    @Test
+    public void testEnrichedStatementsLoaded() {
+        FormRow enrichedStmt = TestDataFactory.statementRow("STMT-001", DomainConstants.SOURCE_TYPE_BANK);
+        enrichedStmt.setProperty("status", Status.ENRICHED.getCode());
+
+        FormRow bankTrx = TestDataFactory.bankTrxRow("TRX-001", "STMT-001");
+        bankTrx.setProperty("status", Status.ENRICHED.getCode());
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_STATEMENT),
+                isNull(), isNull(), eq("from_date"), eq(false), eq(0), eq(100)))
+                .thenReturn(TestDataFactory.rowSet(enrichedStmt));
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                isNull(), isNull(), eq("payment_date"), eq(false), eq(0), eq(10000)))
+                .thenReturn(TestDataFactory.rowSet(bankTrx));
+        wireValidationMocks();
+
+        List<DataContext> result = loader.loadData(mockDao, new HashMap<>());
+
+        assertEquals(1, result.size());
+        assertEquals("TRX-001", result.get(0).getTransactionId());
+    }
+
+    @Test
+    public void testPostedStatementsExcluded() {
+        FormRow postedStmt = TestDataFactory.statementRow("STMT-001", DomainConstants.SOURCE_TYPE_BANK);
+        postedStmt.setProperty("status", Status.POSTED.getCode());
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_STATEMENT),
+                isNull(), isNull(), eq("from_date"), eq(false), eq(0), eq(100)))
+                .thenReturn(TestDataFactory.rowSet(postedStmt));
+        wireValidationMocks();
+
+        List<DataContext> result = loader.loadData(mockDao, new HashMap<>());
+
+        assertEquals(0, result.size());
+    }
+
+    @Test
+    public void testErrorStatementsExcluded() {
+        FormRow errorStmt = TestDataFactory.statementRow("STMT-001", DomainConstants.SOURCE_TYPE_BANK);
+        errorStmt.setProperty("status", Status.ERROR.getCode());
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_STATEMENT),
+                isNull(), isNull(), eq("from_date"), eq(false), eq(0), eq(100)))
+                .thenReturn(TestDataFactory.rowSet(errorStmt));
+        wireValidationMocks();
+
+        List<DataContext> result = loader.loadData(mockDao, new HashMap<>());
+
+        assertEquals(0, result.size());
+    }
+
+    @Test
+    public void testEnrichedBankTrxLoaded() {
+        FormRow enrichedStmt = TestDataFactory.statementRow("STMT-001", DomainConstants.SOURCE_TYPE_BANK);
+        enrichedStmt.setProperty("status", Status.ENRICHED.getCode());
+
+        FormRow bankTrx = TestDataFactory.bankTrxRow("TRX-001", "STMT-001");
+        bankTrx.setProperty("status", Status.ENRICHED.getCode());
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_STATEMENT),
+                isNull(), isNull(), eq("from_date"), eq(false), eq(0), eq(100)))
+                .thenReturn(TestDataFactory.rowSet(enrichedStmt));
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                isNull(), isNull(), eq("payment_date"), eq(false), eq(0), eq(10000)))
+                .thenReturn(TestDataFactory.rowSet(bankTrx));
+        wireValidationMocks();
+
+        List<DataContext> result = loader.loadData(mockDao, new HashMap<>());
+
+        assertEquals(1, result.size());
+        assertTrue(result.get(0).isReEnrichment());
+    }
+
+    @Test
+    public void testManualReviewBankTrxLoaded() {
+        FormRow enrichedStmt = TestDataFactory.statementRow("STMT-001", DomainConstants.SOURCE_TYPE_BANK);
+        enrichedStmt.setProperty("status", Status.ENRICHED.getCode());
+
+        FormRow bankTrx = TestDataFactory.bankTrxRow("TRX-001", "STMT-001");
+        bankTrx.setProperty("status", Status.MANUAL_REVIEW.getCode());
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_STATEMENT),
+                isNull(), isNull(), eq("from_date"), eq(false), eq(0), eq(100)))
+                .thenReturn(TestDataFactory.rowSet(enrichedStmt));
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                isNull(), isNull(), eq("payment_date"), eq(false), eq(0), eq(10000)))
+                .thenReturn(TestDataFactory.rowSet(bankTrx));
+        wireValidationMocks();
+
+        List<DataContext> result = loader.loadData(mockDao, new HashMap<>());
+
+        assertEquals(1, result.size());
+        assertTrue(result.get(0).isReEnrichment());
+    }
+
+    @Test
+    public void testPostedBankTrxExcluded() {
+        FormRow enrichedStmt = TestDataFactory.statementRow("STMT-001", DomainConstants.SOURCE_TYPE_BANK);
+        enrichedStmt.setProperty("status", Status.ENRICHED.getCode());
+
+        FormRow bankTrx = TestDataFactory.bankTrxRow("TRX-001", "STMT-001");
+        bankTrx.setProperty("status", Status.POSTED.getCode());
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_STATEMENT),
+                isNull(), isNull(), eq("from_date"), eq(false), eq(0), eq(100)))
+                .thenReturn(TestDataFactory.rowSet(enrichedStmt));
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                isNull(), isNull(), eq("payment_date"), eq(false), eq(0), eq(10000)))
+                .thenReturn(TestDataFactory.rowSet(bankTrx));
+        wireValidationMocks();
+
+        List<DataContext> result = loader.loadData(mockDao, new HashMap<>());
+
+        assertEquals(0, result.size());
+    }
+
+    @Test
+    public void testPairedBankTrxExcluded() {
+        FormRow enrichedStmt = TestDataFactory.statementRow("STMT-001", DomainConstants.SOURCE_TYPE_BANK);
+        enrichedStmt.setProperty("status", Status.ENRICHED.getCode());
+
+        FormRow bankTrx = TestDataFactory.bankTrxRow("TRX-001", "STMT-001");
+        bankTrx.setProperty("status", Status.PAIRED.getCode());
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_STATEMENT),
+                isNull(), isNull(), eq("from_date"), eq(false), eq(0), eq(100)))
+                .thenReturn(TestDataFactory.rowSet(enrichedStmt));
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                isNull(), isNull(), eq("payment_date"), eq(false), eq(0), eq(10000)))
+                .thenReturn(TestDataFactory.rowSet(bankTrx));
+        wireValidationMocks();
+
+        List<DataContext> result = loader.loadData(mockDao, new HashMap<>());
+
+        assertEquals(0, result.size());
+    }
+
+    @Test
+    public void testReEnrichmentFlagSetForNonNew() {
+        FormRow stmt = TestDataFactory.statementRow("STMT-001", DomainConstants.SOURCE_TYPE_BANK);
+        stmt.setProperty("status", Status.ENRICHED.getCode());
+
+        FormRow bankTrx = TestDataFactory.bankTrxRow("TRX-001", "STMT-001");
+        bankTrx.setProperty("status", Status.ENRICHED.getCode());
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_STATEMENT),
+                isNull(), isNull(), eq("from_date"), eq(false), eq(0), eq(100)))
+                .thenReturn(TestDataFactory.rowSet(stmt));
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                isNull(), isNull(), eq("payment_date"), eq(false), eq(0), eq(10000)))
+                .thenReturn(TestDataFactory.rowSet(bankTrx));
+        wireValidationMocks();
+
+        List<DataContext> result = loader.loadData(mockDao, new HashMap<>());
+
+        assertEquals(1, result.size());
+        assertTrue("ENRICHED trx should have reEnrichment=true", result.get(0).isReEnrichment());
+    }
+
+    @Test
+    public void testReEnrichmentFlagFalseForNew() {
+        FormRow stmt = TestDataFactory.statementRow("STMT-001", DomainConstants.SOURCE_TYPE_BANK);
+        stmt.setProperty("status", Status.CONSOLIDATED.getCode());
+
+        FormRow bankTrx = TestDataFactory.bankTrxRow("TRX-001", "STMT-001");
+        bankTrx.setProperty("status", Status.NEW.getCode());
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_STATEMENT),
+                isNull(), isNull(), eq("from_date"), eq(false), eq(0), eq(100)))
+                .thenReturn(TestDataFactory.rowSet(stmt));
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                isNull(), isNull(), eq("payment_date"), eq(false), eq(0), eq(10000)))
+                .thenReturn(TestDataFactory.rowSet(bankTrx));
+        wireValidationMocks();
+
+        List<DataContext> result = loader.loadData(mockDao, new HashMap<>());
+
+        assertEquals(1, result.size());
+        assertFalse("NEW trx should have reEnrichment=false", result.get(0).isReEnrichment());
+    }
+
+    @Test
+    public void testWorkspaceProtectedTrxMarked() {
+        FormRow stmt = TestDataFactory.statementRow("STMT-001", DomainConstants.SOURCE_TYPE_BANK);
+        stmt.setProperty("status", Status.ENRICHED.getCode());
+
+        FormRow bankTrx = TestDataFactory.bankTrxRow("TRX-001", "STMT-001");
+        bankTrx.setProperty("status", Status.ENRICHED.getCode());
+
+        // Mock enrichment record with IN_REVIEW status
+        FormRow enrichmentRow = new FormRow();
+        enrichmentRow.setId("ENR-001");
+        enrichmentRow.setProperty(FrameworkConstants.FIELD_STATUS, Status.IN_REVIEW.getCode());
+        FormRowSet enrichmentRows = TestDataFactory.rowSet(enrichmentRow);
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_STATEMENT),
+                isNull(), isNull(), eq("from_date"), eq(false), eq(0), eq(100)))
+                .thenReturn(TestDataFactory.rowSet(stmt));
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                isNull(), isNull(), eq("payment_date"), eq(false), eq(0), eq(10000)))
+                .thenReturn(TestDataFactory.rowSet(bankTrx));
+        // Mock enrichment lookup
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                eq("WHERE c_source_trx_id = ?"), any(String[].class),
+                isNull(), eq(false), eq(0), eq(1)))
+                .thenReturn(enrichmentRows);
+        wireValidationMocks();
+
+        List<DataContext> result = loader.loadData(mockDao, new HashMap<>());
+
+        assertEquals(1, result.size());
+        assertEquals("true", result.get(0).getAdditionalDataValue("workspace_protected"));
+    }
+
+    @Test
+    public void testPairedEnrichmentTrxMarkedWorkspaceProtected() {
+        FormRow stmt = TestDataFactory.statementRow("STMT-001", DomainConstants.SOURCE_TYPE_BANK);
+        stmt.setProperty("status", Status.ENRICHED.getCode());
+
+        FormRow bankTrx = TestDataFactory.bankTrxRow("TRX-001", "STMT-001");
+        bankTrx.setProperty("status", Status.ENRICHED.getCode());
+
+        // Mock enrichment record with PAIRED status
+        FormRow enrichmentRow = new FormRow();
+        enrichmentRow.setId("ENR-001");
+        enrichmentRow.setProperty(FrameworkConstants.FIELD_STATUS, Status.PAIRED.getCode());
+        FormRowSet enrichmentRows = TestDataFactory.rowSet(enrichmentRow);
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_STATEMENT),
+                isNull(), isNull(), eq("from_date"), eq(false), eq(0), eq(100)))
+                .thenReturn(TestDataFactory.rowSet(stmt));
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                isNull(), isNull(), eq("payment_date"), eq(false), eq(0), eq(10000)))
+                .thenReturn(TestDataFactory.rowSet(bankTrx));
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                eq("WHERE c_source_trx_id = ?"), any(String[].class),
+                isNull(), eq(false), eq(0), eq(1)))
+                .thenReturn(enrichmentRows);
+        wireValidationMocks();
+
+        List<DataContext> result = loader.loadData(mockDao, new HashMap<>());
+
+        assertEquals(1, result.size());
+        assertEquals("true", result.get(0).getAdditionalDataValue("workspace_protected"));
+    }
+
+    @Test
+    public void testEnrichmentStatusStoredInAdditionalData() {
+        FormRow stmt = TestDataFactory.statementRow("STMT-001", DomainConstants.SOURCE_TYPE_BANK);
+        stmt.setProperty("status", Status.ENRICHED.getCode());
+
+        FormRow bankTrx = TestDataFactory.bankTrxRow("TRX-001", "STMT-001");
+        bankTrx.setProperty("status", Status.ENRICHED.getCode());
+
+        // Mock enrichment record with ENRICHED status (not workspace-protected)
+        FormRow enrichmentRow = new FormRow();
+        enrichmentRow.setId("ENR-001");
+        enrichmentRow.setProperty(FrameworkConstants.FIELD_STATUS, Status.ENRICHED.getCode());
+        FormRowSet enrichmentRows = TestDataFactory.rowSet(enrichmentRow);
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_STATEMENT),
+                isNull(), isNull(), eq("from_date"), eq(false), eq(0), eq(100)))
+                .thenReturn(TestDataFactory.rowSet(stmt));
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                isNull(), isNull(), eq("payment_date"), eq(false), eq(0), eq(10000)))
+                .thenReturn(TestDataFactory.rowSet(bankTrx));
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                eq("WHERE c_source_trx_id = ?"), any(String[].class),
+                isNull(), eq(false), eq(0), eq(1)))
+                .thenReturn(enrichmentRows);
+        wireValidationMocks();
+
+        List<DataContext> result = loader.loadData(mockDao, new HashMap<>());
+
+        assertEquals(1, result.size());
+        assertEquals(Status.ENRICHED.getCode(), result.get(0).getAdditionalDataValue("enrichment_status"));
+    }
+
+    // ===== Helper =====
+
+    private void wireValidationMocks() {
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_STATEMENT),
+                isNull(), isNull(), isNull(), eq(false), eq(0), eq(1)))
+                .thenReturn(TestDataFactory.emptyRowSet());
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                isNull(), isNull(), isNull(), eq(false), eq(0), eq(1)))
+                .thenReturn(TestDataFactory.emptyRowSet());
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_SECU_TOTAL_TRX),
+                isNull(), isNull(), isNull(), eq(false), eq(0), eq(1)))
+                .thenReturn(TestDataFactory.emptyRowSet());
     }
 }

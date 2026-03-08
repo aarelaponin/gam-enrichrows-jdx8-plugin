@@ -54,6 +54,10 @@ public class LoanResolutionStep extends AbstractDataStep {
 
     @Override
     public boolean shouldExecute(DataContext context) {
+        // §9b: Skip if loan already resolved (no sentinel)
+        if (isFieldResolved(context, "loan_id")) {
+            return false;
+        }
         // Only bank transactions. Secu transactions don't have loan contracts.
         return "bank".equals(context.getSourceType())
             && (context.getErrorMessage() == null || context.getErrorMessage().isEmpty());
@@ -82,9 +86,20 @@ public class LoanResolutionStep extends AbstractDataStep {
         if (otherSideAccount != null && !otherSideAccount.isEmpty()) {
             loanRow = lookupByAccount(otherSideAccount, formDataDao);
             if (loanRow != null) {
-                setResolved(context, loanRow, "ACCOUNT_NUMBER");
+                setResolved(context, loanRow, "TIER_2_ACCOUNT");
                 return new StepResult(true,
                         "Loan resolved by account: " + otherSideAccount);
+            }
+        }
+
+        // Tier 2b: Lookup via customer_account chain
+        if (otherSideAccount != null && !otherSideAccount.isEmpty()) {
+            loanRow = lookupByCustomerAccount(otherSideAccount, formDataDao);
+            if (loanRow != null) {
+                setResolved(context, loanRow, "TIER_2B_CUSTOMER");
+                return new StepResult(true, String.format(
+                        "Loan resolved by customer account chain: %s → customer → loan %s",
+                        otherSideAccount, loanRow.getId()));
             }
         }
 
@@ -128,9 +143,9 @@ public class LoanResolutionStep extends AbstractDataStep {
     private FormRow lookupByContractNumber(String contractNumber, FormDataDao formDataDao) {
         if (contractNumber == null) return null;
 
-        String condition = "WHERE c_contract_number = ? AND c_status = 'ACTIVE'";
+        String condition = "WHERE c_referenceNumber = ? AND c_status = 'ls-active'";
         FormRowSet rows = formDataDao.find(null,
-                DomainConstants.TABLE_LOAN_MASTER,
+                DomainConstants.TABLE_LOAN_CONTRACT,
                 condition,
                 new String[] { contractNumber },
                 null, false, 0, 1);
@@ -144,9 +159,9 @@ public class LoanResolutionStep extends AbstractDataStep {
     private FormRow lookupByAccount(String otherSideAccount, FormDataDao formDataDao) {
         if (otherSideAccount == null || otherSideAccount.isEmpty()) return null;
 
-        String condition = "WHERE c_counterparty_account = ? AND c_status = 'ACTIVE'";
+        String condition = "WHERE c_account_number = ? AND c_status = 'ls-active'";
         FormRowSet rows = formDataDao.find(null,
-                DomainConstants.TABLE_LOAN_MASTER,
+                DomainConstants.TABLE_LOAN_CONTRACT,
                 condition,
                 new String[] { otherSideAccount },
                 null, false, 0, 1);
@@ -161,44 +176,44 @@ public class LoanResolutionStep extends AbstractDataStep {
                                      FormDataDao formDataDao) {
         FormRow loanRow = new FormRow();
 
-        String loanId = "LN-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String loanId = UUID.randomUUID().toString();
         loanRow.setId(loanId);
 
-        // Contract number from description extraction
-        loanRow.setProperty("contract_number", contractNumber);
+        // Contract reference from description extraction
+        loanRow.setProperty("referenceNumber", contractNumber);
 
-        // Counterparty info from statement fields
-        loanRow.setProperty("counterparty_account", nvl(context.getOtherSideAccount()));
-        loanRow.setProperty("counterparty_name", nvl(context.getOtherSideName()));
-        loanRow.setProperty("counterparty_bic", nvl(context.getOtherSideBic()));
+        // Borrower info from statement fields
+        loanRow.setProperty("account_number", nvl(context.getOtherSideAccount()));
+        loanRow.setProperty("customer_name", nvl(context.getOtherSideName()));
 
         // Best-effort fields
-        loanRow.setProperty("contract_currency",
+        loanRow.setProperty("currency",
                 context.getCurrency() != null ? context.getCurrency() : "EUR");
-        loanRow.setProperty("direction", inferDirection(context));
+        loanRow.setProperty("lendingBankId", DomainConstants.FUND_CUSTOMER_ID);
 
-        // Status and source
-        loanRow.setProperty("status", "DRAFT");
-        loanRow.setProperty("source", "AUTO_REGISTERED");
-        loanRow.setProperty("registration_note",
+        // Status
+        loanRow.setProperty("status", "ls-draft");
+        loanRow.setProperty("internalNotes",
                 String.format("Auto-registered from bank txn %s. " +
                         "Contract number '%s' extracted from description: '%s'. " +
-                        "Other side: %s (%s).",
+                        "Other side: %s (%s). Direction inferred: %s.",
                         context.getTransactionId(),
                         contractNumber,
                         truncate(context.getPaymentDescription(), 100),
                         nvl(context.getOtherSideName()),
-                        nvl(context.getOtherSideAccount())));
+                        nvl(context.getOtherSideAccount()),
+                        inferDirection(context)));
 
         FormRowSet rowSet = new FormRowSet();
         rowSet.add(loanRow);
-        formDataDao.saveOrUpdate(null, DomainConstants.TABLE_LOAN_MASTER, rowSet);
+        formDataDao.saveOrUpdate(null, DomainConstants.TABLE_LOAN_CONTRACT, rowSet);
 
         LogUtil.info(CLASS_NAME, String.format(
-                "Auto-registered loan %s: contract='%s', counterparty='%s', direction=%s",
+                "Auto-registered loan %s: ref='%s', counterparty='%s', direction=%s, txn=%s",
                 loanId, contractNumber,
                 nvl(context.getOtherSideName()),
-                inferDirection(context)));
+                inferDirection(context),
+                context.getTransactionId()));
 
         return loanRow;
     }
@@ -217,9 +232,10 @@ public class LoanResolutionStep extends AbstractDataStep {
             switch (internalType) {
                 case "INT_INCOME":
                 case "LOAN_PAYMENT":
+                case "CUST_INT":
                     return "LENDER";
                 case "INT_EXPENSE":
-                case "MGMT_FEE":
+                case "LOAN_DISBURSEMENT":
                     return "BORROWER";
                 default:
                     break;
@@ -229,17 +245,96 @@ public class LoanResolutionStep extends AbstractDataStep {
         return null;
     }
 
+    /**
+     * Reclassify UNCLASSIFIED transactions based on D/C indicator.
+     * When F14 couldn't classify the description but loan linkage proves
+     * the transaction is loan-related, use D/C to determine the type.
+     */
+    private void reclassifyIfNeeded(DataContext context) {
+        Map<String, Object> data = context.getAdditionalData();
+        String internalType = data != null ? (String) data.get("internal_type") : null;
+
+        if (!"UNCLASSIFIED".equals(internalType)) {
+            return;
+        }
+
+        String dc = context.getDebitCredit();
+        if ("C".equals(dc)) {
+            context.setAdditionalDataValue("internal_type", "LOAN_PAYMENT");
+            LogUtil.info(CLASS_NAME, String.format(
+                    "Reclassified UNCLASSIFIED → LOAN_PAYMENT (D/C=C) for txn=%s",
+                    context.getTransactionId()));
+        } else if ("D".equals(dc)) {
+            context.setAdditionalDataValue("internal_type", "LOAN_DISBURSEMENT");
+            LogUtil.info(CLASS_NAME, String.format(
+                    "Reclassified UNCLASSIFIED → LOAN_DISBURSEMENT (D/C=D) for txn=%s",
+                    context.getTransactionId()));
+        }
+    }
+
     private void setResolved(DataContext context, FormRow loanRow, String method) {
+        reclassifyIfNeeded(context);
+
         context.setAdditionalDataValue("loan_id", loanRow.getId());
-        context.setAdditionalDataValue("loan_direction", loanRow.getProperty("direction"));
+        context.setAdditionalDataValue("loan_direction", inferDirection(context));
         context.setAdditionalDataValue("loan_resolution_method", method);
 
+        String internalType = context.getAdditionalData() != null
+                ? (String) context.getAdditionalData().get("internal_type") : null;
+
         LogUtil.info(CLASS_NAME, String.format(
-                "Loan resolved: txn=%s → loan=%s (method=%s, direction=%s)",
+                "Loan resolved: txn=%s → loan=%s (method=%s, type=%s, direction=%s)",
                 context.getTransactionId(),
                 loanRow.getId(),
                 method,
-                loanRow.getProperty("direction")));
+                internalType,
+                inferDirection(context)));
+    }
+
+    /**
+     * Tier 2b: Lookup loan via customer_account chain.
+     * other_side_account → customer_account.accountNumber → customerId → loanContract.customerId
+     * Active-first with fallback to non-cancelled statuses.
+     */
+    private FormRow lookupByCustomerAccount(String otherSideAccount, FormDataDao formDataDao) {
+        if (otherSideAccount == null || otherSideAccount.isEmpty()) return null;
+
+        // Step 1: other_side_account → customer_account.accountNumber → customerId
+        String accountCondition = "WHERE c_accountNumber = ? AND c_status = 'Active'";
+        FormRowSet accountRows = formDataDao.find(null,
+                DomainConstants.TABLE_CUSTOMER_ACCOUNT,
+                accountCondition,
+                new String[] { otherSideAccount },
+                null, false, 0, 1);
+
+        if (accountRows == null || accountRows.isEmpty()) return null;
+
+        String customerId = accountRows.get(0).getProperty("customerId");
+        if (customerId == null || customerId.isEmpty()) return null;
+
+        // Step 2: customerId → loanContract.customerId (active first)
+        String activeLoanCondition = "WHERE c_customerId = ? AND c_status = 'ls-active'";
+        FormRowSet activeLoans = formDataDao.find(null,
+                DomainConstants.TABLE_LOAN_CONTRACT,
+                activeLoanCondition,
+                new String[] { customerId },
+                null, false, 0, 1);
+
+        if (activeLoans != null && !activeLoans.isEmpty()) {
+            return activeLoans.get(0);
+        }
+
+        // Fallback: non-cancelled/non-written-off, ordered by priority
+        String fallbackCondition = "WHERE c_customerId = ? " +
+                "AND c_status NOT IN ('ls-cancelled', 'ls-written-off') " +
+                "ORDER BY FIELD(c_status, 'ls-repaid', 'ls-overdue', 'ls-default', 'ls-approved', 'ls-draft')";
+        FormRowSet fallbackLoans = formDataDao.find(null,
+                DomainConstants.TABLE_LOAN_CONTRACT,
+                fallbackCondition,
+                new String[] { customerId },
+                null, false, 0, 1);
+
+        return (fallbackLoans != null && !fallbackLoans.isEmpty()) ? fallbackLoans.get(0) : null;
     }
 
     private static String nvl(String value) {

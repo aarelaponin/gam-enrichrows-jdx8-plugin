@@ -9,10 +9,16 @@ import com.fiscaladmin.gam.framework.status.Status;
 import com.fiscaladmin.gam.framework.status.StatusManager;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.joget.apps.app.service.AppUtil;
 import org.joget.apps.form.dao.FormDataDao;
 import org.joget.apps.form.model.FormRow;
 import org.joget.apps.form.model.FormRowSet;
 import org.joget.commons.util.LogUtil;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 import java.util.*;
 import java.text.SimpleDateFormat;
 import java.text.ParseException;
@@ -67,6 +73,13 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
     @Override
     public PersistenceResult persist(DataContext context, FormDataDao dao,
                                     Map<String, Object> parameters) {
+        // §5: Refuse to persist workspace-protected transactions
+        if ("true".equals(context.getAdditionalDataValue("workspace_protected"))) {
+            LogUtil.warn(CLASS_NAME, "Refusing to persist workspace-protected transaction: "
+                    + context.getTransactionId());
+            return new PersistenceResult(true, null, "Skipped — workspace protected");
+        }
+
         try {
             // Create the enriched record with all 52 F01.05 fields
             FormRow enrichedRow = createEnrichedRecord(context, parameters);
@@ -83,7 +96,8 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
                 Status targetStatus = needsManualReview ? Status.MANUAL_REVIEW : Status.ENRICHED;
 
                 // Transition enrichment record through lifecycle via StatusManager
-                transitionEnrichment(dao, recordId, targetStatus, needsManualReview);
+                boolean isReEnrichment = context.getAdditionalDataValue("existing_enrichment_id") != null;
+                transitionEnrichment(dao, recordId, targetStatus, needsManualReview, isReEnrichment, context);
 
                 // Update context with persistence outcome (used by orchestrator for post-persistence logic)
                 context.setAdditionalDataValue("enriched_record_id", recordId);
@@ -120,8 +134,13 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
      */
     private FormRow createEnrichedRecord(DataContext context, Map<String, Object> config) {
         FormRow row = createFormRow();
-        String enrichedId = "TRX-" + UUID.randomUUID().toString().substring(0, 6).toUpperCase();
-        row.setId(enrichedId);
+        // §9b: Reuse existing enrichment ID for upsert on re-enrichment
+        String existingId = (String) context.getAdditionalDataValue("existing_enrichment_id");
+        if (existingId != null && !existingId.isEmpty()) {
+            row.setId(existingId);
+        } else {
+            row.setId("TRX-" + UUID.randomUUID().toString().substring(0, 6).toUpperCase());
+        }
 
         Map<String, Object> data = context.getAdditionalData();
         if (data == null) data = new HashMap<>();
@@ -208,12 +227,14 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
         }
         // 46-47: fee_trx_id, pair_id = NULL
 
-        // ===== LOAN RESOLUTION (2 fields) =====
+        // ===== LOAN RESOLUTION (3 fields) =====
         String loanId = getStringValue(data.get("loan_id"));
         String loanDirection = getStringValue(data.get("loan_direction"));
+        String loanResolutionMethod = getStringValue(data.get("loan_resolution_method"));
         if (loanId != null && !loanId.isEmpty()) {
             setPropertySafe(row, "loan_id", loanId);
             setPropertySafe(row, "loan_direction", loanDirection);
+            setPropertySafe(row, "loan_resolution_method", loanResolutionMethod);
         }
 
         // ===== STATUS & NOTES (5 fields) =====
@@ -557,22 +578,44 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
 
     /**
      * Transition enrichment record through its lifecycle via StatusManager.
-     * Lifecycle: null → NEW → PROCESSING → {ENRICHED|MANUAL_REVIEW|ERROR}
+     * First-time lifecycle: null → NEW → PROCESSING → {ENRICHED|MANUAL_REVIEW|ERROR}
+     * Re-enrichment: transition directly to target if different from current status.
      */
     private void transitionEnrichment(FormDataDao dao, String recordId,
-                                      Status targetStatus, boolean needsManualReview) {
+                                      Status targetStatus, boolean needsManualReview,
+                                      boolean isReEnrichment, DataContext context) {
         if (statusManager == null) {
             return;
         }
         try {
             String tableName = DomainConstants.TABLE_TRX_ENRICHMENT;
-            statusManager.transition(dao, tableName, EntityType.ENRICHMENT, recordId,
-                    Status.NEW, "rows-enrichment", "Enrichment record created");
-            statusManager.transition(dao, tableName, EntityType.ENRICHMENT, recordId,
-                    Status.PROCESSING, "rows-enrichment", "Pipeline processing");
-            statusManager.transition(dao, tableName, EntityType.ENRICHMENT, recordId,
-                    targetStatus, "rows-enrichment",
-                    needsManualReview ? "Requires manual review" : "Enrichment completed successfully");
+            if (isReEnrichment) {
+                // §4.1: Skip self-transitions silently — only transition when status actually changes.
+                String currentEnrichmentStatus = (String) context.getAdditionalDataValue("enrichment_status");
+                if (targetStatus.getCode().equals(currentEnrichmentStatus)) {
+                    return;
+                }
+                try {
+                    statusManager.transition(dao, tableName, EntityType.ENRICHMENT, recordId,
+                            targetStatus, "rows-enrichment",
+                            needsManualReview ? "Re-enrichment: requires manual review"
+                                    : "Re-enrichment: completed successfully");
+                    LogUtil.info(CLASS_NAME, "Enrichment " + recordId
+                            + " status upgraded: " + currentEnrichmentStatus + " → " + targetStatus.getCode());
+                } catch (InvalidTransitionException e) {
+                    LogUtil.warn(CLASS_NAME, "Cannot transition enrichment " + recordId
+                            + ": " + currentEnrichmentStatus + " → " + targetStatus.getCode()
+                            + " — " + e.getMessage());
+                }
+            } else {
+                statusManager.transition(dao, tableName, EntityType.ENRICHMENT, recordId,
+                        Status.NEW, "rows-enrichment", "Enrichment record created");
+                statusManager.transition(dao, tableName, EntityType.ENRICHMENT, recordId,
+                        Status.PROCESSING, "rows-enrichment", "Pipeline processing");
+                statusManager.transition(dao, tableName, EntityType.ENRICHMENT, recordId,
+                        targetStatus, "rows-enrichment",
+                        needsManualReview ? "Requires manual review" : "Enrichment completed successfully");
+            }
         } catch (InvalidTransitionException e) {
             LogUtil.error(CLASS_NAME, e, "Invalid status transition for enrichment: " + recordId);
         } catch (Exception e) {
@@ -597,6 +640,16 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
             Status sourceTarget = (targetStatus == Status.ERROR) ? Status.ERROR
                     : (targetStatus == Status.MANUAL_REVIEW) ? Status.MANUAL_REVIEW
                     : Status.ENRICHED;
+
+            if (context.isReEnrichment()) {
+                // Only transition if status actually changes
+                String currentStatus = context.getTransactionRow()
+                        .getProperty(FrameworkConstants.FIELD_STATUS);
+                if (sourceTarget.getCode().equals(currentStatus)) {
+                    return; // Same status — no transition needed
+                }
+            }
+
             String reason = buildTransitionReason(context);
             statusManager.transition(dao, entityType, context.getTransactionId(),
                     sourceTarget, "rows-enrichment", reason);
@@ -656,76 +709,54 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
         LogUtil.info(CLASS_NAME, "Processing " + contexts.size() + 
                    " transactions across " + statementGroups.size() + " statements");
         
+        // CHANGES-09: Get Spring TransactionManager for independent statement commits.
+        // Each statement's persistence runs in its own REQUIRES_NEW transaction,
+        // preventing the Bitronix JTA timeout when processing many records.
+        TransactionTemplate txTemplate = null;
+        try {
+            PlatformTransactionManager txManager = (PlatformTransactionManager)
+                    AppUtil.getApplicationContext().getBean("transactionManager");
+            txTemplate = new TransactionTemplate(txManager);
+            txTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+            LogUtil.info(CLASS_NAME, "Using REQUIRES_NEW transactions per statement");
+        } catch (Exception e) {
+            LogUtil.warn(CLASS_NAME, "Could not obtain TransactionManager, "
+                    + "falling back to single transaction: " + e.getMessage());
+        }
+
         // Process each statement's transactions
         for (Map.Entry<String, List<DataContext>> entry : statementGroups.entrySet()) {
             String statementId = entry.getKey();
             List<DataContext> statementTransactions = entry.getValue();
-            
-            LogUtil.info(CLASS_NAME, "Processing statement " + statementId + 
+
+            LogUtil.info(CLASS_NAME, "Processing statement " + statementId +
                        " with " + statementTransactions.size() + " transactions");
-            
-            BatchPersistenceResult.StatementStatus statementStatus = 
+
+            // Persist this statement's transactions in an independent transaction
+            final TransactionTemplate finalTxTemplate = txTemplate;
+            final BatchPipelineResult finalPipelineResult = pipelineResult;
+            final Map<String, Object> finalConfig = config;
+
+            int[] counts = persistStatementGroup(statementId, statementTransactions,
+                    finalPipelineResult, dao, finalConfig, batchResult, finalTxTemplate);
+
+            int statementSuccessCount = counts[0];
+            int statementFailureCount = counts[1];
+
+            BatchPersistenceResult.StatementStatus statementStatus =
                 new BatchPersistenceResult.StatementStatus(statementId);
             statementStatus.setTotalTransactions(statementTransactions.size());
-            
-            int statementSuccessCount = 0;
-            int statementFailureCount = 0;
-            
-            // Process each transaction for this statement
-            for (DataContext context : statementTransactions) {
-                try {
-                    // Get the pipeline result for this transaction
-                    PipelineResult txPipelineResult = findPipelineResult(pipelineResult, context.getTransactionId());
-                    
-                    // Only persist if pipeline was successful
-                    if (txPipelineResult != null && txPipelineResult.isSuccess()) {
-                        PersistenceResult persistResult = persist(context, dao, config);
-                        batchResult.addResult(persistResult);
-                        
-                        if (persistResult.isSuccess()) {
-                            statementSuccessCount++;
-                            LogUtil.info(CLASS_NAME, "Successfully persisted transaction " + 
-                                       context.getTransactionId() + " as " + persistResult.getRecordId());
-                        } else {
-                            statementFailureCount++;
-                            LogUtil.error(CLASS_NAME, null, "Failed to persist transaction " + 
-                                        context.getTransactionId() + ": " + persistResult.getMessage());
-                        }
-                    } else {
-                        // Transaction failed in pipeline, skip persistence
-                        statementFailureCount++;
-                        PersistenceResult skipResult = new PersistenceResult(false, null,
-                            "Skipped due to pipeline failure");
-                        batchResult.addResult(skipResult);
-                        LogUtil.info(CLASS_NAME, "Skipping persistence for failed transaction " + 
-                                   context.getTransactionId());
-                    }
-                    
-                } catch (Exception e) {
-                    statementFailureCount++;
-                    LogUtil.error(CLASS_NAME, e, "Error persisting transaction " + context.getTransactionId());
-                    PersistenceResult errorResult = new PersistenceResult(false, null,
-                        "Persistence error: " + e.getMessage());
-                    batchResult.addResult(errorResult);
-                }
-            }
-            
-            // Update statement status
             statementStatus.setSuccessCount(statementSuccessCount);
             statementStatus.setFailureCount(statementFailureCount);
-            
-            // Update statement in database
-            updateStatementStatus(statementId, statementSuccessCount, 
-                                statementFailureCount, statementTransactions.size(), dao);
-            
+
             // Determine final statement status
             String finalStatus = statementFailureCount == 0 ?
                     Status.ENRICHED.getCode() : Status.ERROR.getCode();
             statementStatus.setStatus(finalStatus);
             statementStatus.setProcessedDate(new Date());
-            
+
             batchResult.addStatementStatus(statementId, statementStatus);
-            
+
             LogUtil.info(CLASS_NAME, "Statement " + statementId + " processing complete: " +
                        statementSuccessCount + " success, " + statementFailureCount + " failures");
         }
@@ -760,6 +791,97 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
     }
     
     /**
+     * CHANGES-09: Persist a single statement's transactions, optionally in an independent transaction.
+     *
+     * If txTemplate is provided, the entire statement group is persisted in a REQUIRES_NEW transaction,
+     * preventing Bitronix JTA timeout when processing many records across statements.
+     * If txTemplate is null (fallback), persistence runs in the current transaction.
+     *
+     * @return int[2]: [successCount, failureCount]
+     */
+    private int[] persistStatementGroup(String statementId, List<DataContext> statementTransactions,
+                                        BatchPipelineResult pipelineResult, FormDataDao dao,
+                                        Map<String, Object> config, BatchPersistenceResult batchResult,
+                                        TransactionTemplate txTemplate) {
+        if (txTemplate != null) {
+            try {
+                return txTemplate.execute(new TransactionCallback<int[]>() {
+                    @Override
+                    public int[] doInTransaction(TransactionStatus status) {
+                        return doStatementPersistence(statementId, statementTransactions,
+                                pipelineResult, dao, config, batchResult);
+                    }
+                });
+            } catch (Exception e) {
+                LogUtil.error(CLASS_NAME, e, "Transaction failed for statement " + statementId
+                        + " — all " + statementTransactions.size() + " records rolled back");
+                return new int[] { 0, statementTransactions.size() };
+            }
+        } else {
+            return doStatementPersistence(statementId, statementTransactions,
+                    pipelineResult, dao, config, batchResult);
+        }
+    }
+
+    /**
+     * Core persistence logic for a single statement group.
+     * Extracted to be callable both within and outside a TransactionTemplate.
+     */
+    private int[] doStatementPersistence(String statementId, List<DataContext> statementTransactions,
+                                         BatchPipelineResult pipelineResult, FormDataDao dao,
+                                         Map<String, Object> config, BatchPersistenceResult batchResult) {
+        int statementSuccessCount = 0;
+        int statementFailureCount = 0;
+
+        for (DataContext context : statementTransactions) {
+            try {
+                PipelineResult txPipelineResult = findPipelineResult(pipelineResult, context.getTransactionId());
+
+                if (txPipelineResult != null && txPipelineResult.isSuccess()) {
+                    PersistenceResult persistResult = persist(context, dao, config);
+                    synchronized (batchResult) {
+                        batchResult.addResult(persistResult);
+                    }
+
+                    if (persistResult.isSuccess()) {
+                        statementSuccessCount++;
+                        LogUtil.info(CLASS_NAME, "Successfully persisted transaction " +
+                                context.getTransactionId() + " as " + persistResult.getRecordId());
+                    } else {
+                        statementFailureCount++;
+                        LogUtil.error(CLASS_NAME, null, "Failed to persist transaction " +
+                                context.getTransactionId() + ": " + persistResult.getMessage());
+                    }
+                } else {
+                    statementFailureCount++;
+                    PersistenceResult skipResult = new PersistenceResult(false, null,
+                            "Skipped due to pipeline failure");
+                    synchronized (batchResult) {
+                        batchResult.addResult(skipResult);
+                    }
+                    LogUtil.info(CLASS_NAME, "Skipping persistence for failed transaction " +
+                            context.getTransactionId());
+                }
+
+            } catch (Exception e) {
+                statementFailureCount++;
+                LogUtil.error(CLASS_NAME, e, "Error persisting transaction " + context.getTransactionId());
+                PersistenceResult errorResult = new PersistenceResult(false, null,
+                        "Persistence error: " + e.getMessage());
+                synchronized (batchResult) {
+                    batchResult.addResult(errorResult);
+                }
+            }
+        }
+
+        // Update statement status within the same transaction
+        updateStatementStatus(statementId, statementSuccessCount,
+                statementFailureCount, statementTransactions.size(), dao);
+
+        return new int[] { statementSuccessCount, statementFailureCount };
+    }
+
+    /**
      * Find pipeline result for a specific transaction
      */
     private PipelineResult findPipelineResult(BatchPipelineResult batchResult, String transactionId) {
@@ -781,21 +903,30 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
     private void updateStatementStatus(String statementId, int successCount,
                                       int failureCount, int totalCount, FormDataDao dao) {
         try {
+            // Load statement row (used for both status check and metadata update)
+            FormRow statementRow = loadFormRow(dao, DomainConstants.TABLE_BANK_STATEMENT, statementId);
+
             // Transition statement status via StatusManager
             if (statusManager != null) {
-                Status targetStatus = failureCount == 0 ? Status.ENRICHED : Status.ERROR;
-                String reason = String.format("Statement processing complete: %d success, %d failures out of %d total",
-                        successCount, failureCount, totalCount);
-                try {
-                    statusManager.transition(dao, EntityType.STATEMENT, statementId,
-                            targetStatus, "rows-enrichment", reason);
-                } catch (InvalidTransitionException e) {
-                    LogUtil.error(CLASS_NAME, e, "Invalid status transition for statement: " + statementId);
+                String currentStatementStatus = statementRow != null
+                        ? statementRow.getProperty(FrameworkConstants.FIELD_STATUS) : null;
+                if (Status.ENRICHED.getCode().equals(currentStatementStatus) && failureCount == 0) {
+                    LogUtil.info(CLASS_NAME, "Statement " + statementId
+                            + " already ENRICHED, skipping status transition");
+                } else {
+                    Status targetStatus = failureCount == 0 ? Status.ENRICHED : Status.ERROR;
+                    String reason = String.format("Statement processing complete: %d success, %d failures out of %d total",
+                            successCount, failureCount, totalCount);
+                    try {
+                        statusManager.transition(dao, EntityType.STATEMENT, statementId,
+                                targetStatus, "rows-enrichment", reason);
+                    } catch (InvalidTransitionException e) {
+                        LogUtil.error(CLASS_NAME, e, "Invalid status transition for statement: " + statementId);
+                    }
                 }
             }
 
             // Save metadata fields (status already handled by StatusManager)
-            FormRow statementRow = loadFormRow(dao, DomainConstants.TABLE_BANK_STATEMENT, statementId);
             if (statementRow != null) {
                 statementRow.setProperty("processing_completed", TIMESTAMP_FORMAT.format(new Date()));
                 statementRow.setProperty("transactions_processed", String.valueOf(totalCount));

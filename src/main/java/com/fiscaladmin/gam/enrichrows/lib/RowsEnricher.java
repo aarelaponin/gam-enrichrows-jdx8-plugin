@@ -67,8 +67,26 @@ public class RowsEnricher extends DefaultApplicationPlugin {
 
             // Load all statements and their rows
             List<DataContext> transactions = dataLoader.loadData(formDataDao, properties);
-            
-            LogUtil.info(CLASS_NAME, "Loaded " + transactions.size() + " transaction rows");
+
+            // Filter out workspace-protected transactions
+            int workspaceProtectedCount = 0;
+            Iterator<DataContext> it = transactions.iterator();
+            while (it.hasNext()) {
+                DataContext ctx = it.next();
+                if ("true".equals(ctx.getAdditionalDataValue("workspace_protected"))) {
+                    it.remove();
+                    workspaceProtectedCount++;
+                }
+            }
+
+            int reEnrichCount = 0;
+            for (DataContext ctx : transactions) {
+                if (ctx.isReEnrichment()) reEnrichCount++;
+            }
+
+            LogUtil.info(CLASS_NAME, "Loaded " + transactions.size() + " transaction rows"
+                    + " (re-enrichment: " + reEnrichCount + ", first-time: " + (transactions.size() - reEnrichCount) + ")"
+                    + (workspaceProtectedCount > 0 ? ", skipped " + workspaceProtectedCount + " workspace-protected" : ""));
             
             // Create and configure the processing pipeline
             boolean stopOnError = "true".equalsIgnoreCase(

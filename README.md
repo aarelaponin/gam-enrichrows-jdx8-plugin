@@ -6,13 +6,16 @@ A Joget DX8 plugin that implements a data processing pipeline for financial tran
 
 This plugin processes transactions from bank statements (F01.00) and their associated rows (F01.03 for bank transactions, F01.04 for securities transactions) through a series of enrichment steps:
 
-1. **Data Loading** - Loads unprocessed transactions from `bank_total_trx` and `secu_total_trx`
-2. **Currency Validation** - Validates against `currency_master`
-3. **FX Conversion** - Converts to EUR using `fx_rates_eur`
-4. **Customer Identification** - Identifies customers from `customer` table (bank transactions only)
-5. **Counterparty Determination** - Identifies counterparties using BIC codes from `counterparty_master`
-6. **F14 Rule Mapping** - Maps transaction types using rules from `cp_txn_mapping`
-7. **Data Persistence** - Saves to `trx_enrichment` table with state management
+1. **Data Loading** — Loads transactions from `bank_total_trx` and `secu_total_trx`
+2. **Currency Validation** — Validates against `currency` master (blocking)
+3. **Counterparty Determination** — Resolves counterparty via BIC from `counterparty_master`
+4. **Customer Identification** — Identifies customers from `customer` table (bank only, 6 methods)
+5. **Asset Resolution** — Resolves securities assets from `asset_master` (secu only)
+6. **F14 Rule Mapping** — Classifies transactions using rules from `cp_txn_mapping`
+7. **Loan Resolution** — Links to loan contracts from `loanContract` (bank only, non-blocking)
+8. **FX Conversion** — Converts non-EUR to EUR using `fx_rates_eur`
+9. **Data Persistence** — Saves to `trxEnrichment` table (REQUIRES_NEW per statement)
+10. **Transaction Pairing** — Matches secu ↔ bank transactions post-persistence
 
 ## Architecture
 
@@ -26,11 +29,14 @@ This plugin processes transactions from bank statements (F01.00) and their assoc
 - **BatchPersistenceResult** - Tracks batch persistence and statement status
 
 #### Processing Steps (`com.fiscaladmin.gam.enrichrows.steps`)
-- **CurrencyValidationStep** - Validates transaction currencies
-- **FXConversionStep** - Converts amounts to EUR
-- **CustomerIdentificationStep** - Identifies customers for bank transactions
-- **CounterpartyDeterminationStep** - Determines counterparties from BIC codes
-- **F14RuleMappingStep** - Maps transactions to F14 internal types
+- **CurrencyValidationStep** — Validates transaction currencies (blocking)
+- **CounterpartyDeterminationStep** — Resolves counterparty from BIC codes
+- **CustomerIdentificationStep** — Identifies customers for bank transactions (6 methods)
+- **AssetResolutionStep** — Resolves securities assets (secu only)
+- **F14RuleMappingStep** — Classifies transactions using F14 rules
+- **LoanResolutionStep** — Links to loan contracts (bank only)
+- **FXConversionStep** — Converts non-EUR amounts to EUR
+- **TransactionPairingStep** — Matches secu ↔ bank transactions (post-persistence)
 
 #### Data Management
 - **TransactionDataLoader** - Loads transactions and marks statements as "processing"
@@ -38,16 +44,18 @@ This plugin processes transactions from bank statements (F01.00) and their assoc
 
 ### State Management
 
-The plugin implements comprehensive state management:
+The plugin uses the gam-framework `StatusManager` for all status transitions:
 
 **Statement States:**
-- `new` → `processing` → `processed` or `processed_with_errors`
+- `CONSOLIDATED` → `ENRICHED`
 
 **Transaction States:**
-- `new` → `enriched`
+- `NEW` → `PROCESSING` → `ENRICHED` or `MANUAL_REVIEW`
 
 **Enrichment Records:**
-- Saved with `processing_status`: `enriched` or `manual_review`
+- `ENRICHED` or `MANUAL_REVIEW` → `PAIRED` (via pairing) → workspace states (IN_REVIEW, ADJUSTED, READY, CONFIRMED)
+
+**Re-enrichment:** ENRICHED statements can be re-processed. Workspace-protected records (PAIRED, IN_REVIEW, ADJUSTED, READY, CONFIRMED, SUPERSEDED) are skipped.
 
 ## Database Schema
 

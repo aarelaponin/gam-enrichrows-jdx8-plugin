@@ -61,6 +61,7 @@ public class DataContext {
     private String errorMessage;
     private Map<String, Object> additionalData;
     private List<String> processedSteps;  // Track all steps that processed this transaction
+    private boolean reEnrichment = false; // True when re-processing a previously enriched transaction
 
     // Constructor
     public DataContext() {
@@ -332,6 +333,14 @@ public class DataContext {
 
     public void setProcessedSteps(List<String> processedSteps) {
         this.processedSteps = processedSteps;
+    }
+
+    public boolean isReEnrichment() {
+        return reEnrichment;
+    }
+
+    public void setReEnrichment(boolean reEnrichment) {
+        this.reEnrichment = reEnrichment;
     }
 
     /**

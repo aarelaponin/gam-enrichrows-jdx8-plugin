@@ -178,6 +178,21 @@ public abstract class AbstractDataStep implements DataStep {
     }
 
     /**
+     * §9b: Check if a field in additionalData is resolved (non-null, non-empty, not a sentinel).
+     * Used by idempotency guards to skip already-resolved fields on re-enrichment.
+     */
+    protected boolean isFieldResolved(DataContext context, String fieldName, String... sentinels) {
+        Object value = context.getAdditionalDataValue(fieldName);
+        if (value == null) return false;
+        String s = value.toString().trim();
+        if (s.isEmpty()) return false;
+        for (String sentinel : sentinels) {
+            if (sentinel.equals(s)) return false;
+        }
+        return true;
+    }
+
+    /**
      * Parse amount string to double for calculations
      */
     protected double parseAmount(String amountStr) {

@@ -40,13 +40,16 @@ This is a Joget DX8 plugin that implements a data processing pipeline for financ
 ### Core Pipeline Architecture
 
 The processing pipeline consists of:
-1. **Data Loading** - Loads unprocessed transactions from `bank_total_trx` and `secu_total_trx`
-2. **Currency Validation** - Validates against `currency_master`
-3. **Counterparty Determination** - Identifies counterparties using BIC codes from `counterparty_master`
-4. **F14 Rule Mapping** - Maps transaction types using rules from `cp_txn_mapping`
-5. **Customer Identification** - Identifies customers from `customer` table
-6. **FX Conversion** - Converts to EUR using `fx_rates_eur`
-7. **Data Persistence** - Saves to `trx_enrichment` table
+1. **Data Loading** — Loads transactions from `bank_total_trx` and `secu_total_trx`
+2. **Currency Validation** — Validates against `currency` master (blocking)
+3. **Counterparty Determination** — Resolves counterparty via BIC from `counterparty_master`
+4. **Customer Identification** — Identifies customers from `customer` table (bank only, 6 methods)
+5. **Asset Resolution** — Resolves securities from `asset_master` (secu only)
+6. **F14 Rule Mapping** — Classifies transactions using rules from `cp_txn_mapping`
+7. **Loan Resolution** — Links to loan contracts from `loanContract` (bank only, non-blocking)
+8. **FX Conversion** — Converts non-EUR to EUR using `fx_rates_eur`
+9. **Data Persistence** — Saves to `trxEnrichment` table (REQUIRES_NEW per statement)
+10. **Transaction Pairing** — Matches secu ↔ bank post-persistence
 
 ### Framework Components
 
@@ -62,11 +65,16 @@ The reusable framework in `com.fiscaladmin.gam.enrichrows.framework` provides:
 - `bank_statement`, `bank_total_trx`, `secu_total_trx` - Transaction sources
 
 **Master Data:**
-- `customer` - Customer master records
+- `customer` - Customer master records (includes `is_fund` flag for fund fallback)
+- `customer_account` - Customer ↔ IBAN mapping
 - `counterparty_master` - Counterparty/bank information
-- `currency_master` - Valid currencies
-- `cp_txn_mapping` - F14 transaction type mapping rules
-- `fx_rates_eur` - Exchange rates to EUR
+- `currency` - Valid currencies
+- `asset_master` - Securities master (ticker, ISIN, status)
+- `cp_txn_mapping` - F14 classification rules (with secondary conditions)
+- `fx_rates_eur` - Exchange rates (EUR-based)
+- `loanContract` - Loan contract master
+- `bank` - Bank registry
+- `broker` - Broker registry
 
 **Processing:**
 - `trx_enrichment` - Enriched transaction output
@@ -84,7 +92,7 @@ The reusable framework in `com.fiscaladmin.gam.enrichrows.framework` provides:
 To add a new step:
 1. Create a class extending `AbstractDataStep` in `com.fiscaladmin.gam.enrichrows.steps`
 2. Implement `performStep()` and `getStepName()`
-3. Add to pipeline in `TransactionProcessor` using `.addStep(new YourStep())`
+3. Add to pipeline in `RowsEnricher` using `.addStep(new YourStep())`
 
 ### Common Development Tasks
 

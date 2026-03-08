@@ -28,7 +28,12 @@ public final class DomainConstants {
     public static final String TABLE_CUSTOMER_ACCOUNT = "customer_account";
     public static final String TABLE_BANK = "bank";
     public static final String TABLE_BROKER = "broker";
-    public static final String TABLE_LOAN_MASTER = "loan_master";
+    public static final String TABLE_LOAN_CONTRACT = "loanContract";
+
+    // =====================================================
+    // Fund Identity
+    // =====================================================
+    public static final String FUND_CUSTOMER_ID = "12345678";  // Genesis Asset Management OÜ
 
     // =====================================================
     // Processing Tables (GL specific)

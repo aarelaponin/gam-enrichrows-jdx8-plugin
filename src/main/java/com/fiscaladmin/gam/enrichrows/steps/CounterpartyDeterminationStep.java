@@ -135,6 +135,10 @@ public class CounterpartyDeterminationStep extends AbstractDataStep {
 
     @Override
     public boolean shouldExecute(DataContext context) {
+        // §9b: Skip if counterparty already resolved (UNKNOWN = resolved, no sentinel)
+        if (isFieldResolved(context, "counterparty_id")) {
+            return false;
+        }
         // Execute for all transactions that haven't failed yet
         return context.getErrorMessage() == null || context.getErrorMessage().isEmpty();
     }

@@ -87,6 +87,7 @@ public class TestDataFactory {
         row.setProperty("payment_description", "Wire transfer");
         row.setProperty("reference_number", "REF-12345");
         row.setProperty("customer_id", "CUST-001");
+        row.setProperty("transaction_reference", "900727947,900727952");
         return row;
     }
 
@@ -266,6 +267,13 @@ public class TestDataFactory {
         ctx.setAdditionalDataValue("fx_rate_date", rateDate);
         ctx.setAdditionalDataValue("fx_rate_source", "test");
         ctx.setBaseAmount(String.valueOf(Double.parseDouble(ctx.getAmount()) * rate));
+        return ctx;
+    }
+
+    public static DataContext withLoan(DataContext ctx, String loanId, String direction, String method) {
+        ctx.setAdditionalDataValue("loan_id", loanId);
+        ctx.setAdditionalDataValue("loan_direction", direction);
+        ctx.setAdditionalDataValue("loan_resolution_method", method);
         return ctx;
     }
 

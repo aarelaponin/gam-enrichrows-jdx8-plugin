@@ -40,6 +40,10 @@ public class AssetResolutionStep extends AbstractDataStep {
 
     @Override
     public boolean shouldExecute(DataContext context) {
+        // §9b: Skip if asset already resolved (UNKNOWN = resolved, no sentinel)
+        if (isFieldResolved(context, "asset_id")) {
+            return false;
+        }
         // Only execute for securities transactions
         if (!DomainConstants.SOURCE_TYPE_SECU.equals(context.getSourceType())) {
             return false;

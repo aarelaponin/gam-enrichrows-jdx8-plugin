@@ -399,4 +399,22 @@ public class AssetResolutionStepTest {
         assertEquals("equity", ctx.getAdditionalDataValue("asset_class"));
         assertTrue(((String) ctx.getAdditionalDataValue("asset_id")).startsWith("AST-"));
     }
+
+    // =========================================================================
+    // §9b Idempotency guard tests
+    // =========================================================================
+
+    @Test
+    public void testIdempotency_skipsResolved() {
+        DataContext ctx = TestDataFactory.secuContext();
+        TestDataFactory.withAsset(ctx, "ASSET-001", "US0378331005");
+        assertFalse("Should skip when asset already resolved", step.shouldExecute(ctx));
+    }
+
+    @Test
+    public void testIdempotency_skipsEvenUnknown() {
+        DataContext ctx = TestDataFactory.secuContext();
+        TestDataFactory.withAsset(ctx, "UNKNOWN", null);
+        assertFalse("Should skip even when asset is UNKNOWN (no sentinel)", step.shouldExecute(ctx));
+    }
 }

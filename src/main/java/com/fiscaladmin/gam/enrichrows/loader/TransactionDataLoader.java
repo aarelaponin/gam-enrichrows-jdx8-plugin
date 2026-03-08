@@ -18,8 +18,17 @@ import java.util.*;
  * This replaces TransactionFetcherStep and separates data loading from processing.
  */
 public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
-    
+
     private static final String CLASS_NAME = TransactionDataLoader.class.getName();
+
+    private static final Set<String> WORKSPACE_PROTECTED_STATUSES = new HashSet<>(Arrays.asList(
+        Status.PAIRED.getCode(),
+        Status.IN_REVIEW.getCode(),
+        Status.ADJUSTED.getCode(),
+        Status.READY.getCode(),
+        Status.CONFIRMED.getCode(),
+        Status.SUPERSEDED.getCode()
+    ));
 
     private StatusManager statusManager;
 
@@ -52,13 +61,13 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
         List<DataContext> transactions = new ArrayList<>();
 
         try {
-            // Get all unprocessed statements
-            List<FormRow> unprocessedStatements = fetchUnprocessedStatements(dao, parameters);
-            
-            LogUtil.info(CLASS_NAME, "Found " + unprocessedStatements.size() + " unprocessed statements");
+            // Get all enrichable statements (CONSOLIDATED + ENRICHED)
+            List<FormRow> enrichableStatements = fetchEnrichableStatements(dao, parameters);
+
+            LogUtil.info(CLASS_NAME, "Found " + enrichableStatements.size() + " enrichable statements");
 
             // Process each statement
-            for (FormRow statementRow : unprocessedStatements) {
+            for (FormRow statementRow : enrichableStatements) {
                 String statementId = statementRow.getId();
                 String accountType = statementRow.getProperty(DomainConstants.FIELD_ACCOUNT_TYPE);
 
@@ -82,13 +91,10 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
     }
     
     /**
-     * Fetch all unprocessed statements
+     * Fetch all enrichable statements (CONSOLIDATED for first-time, ENRICHED for re-enrichment)
      */
-    private List<FormRow> fetchUnprocessedStatements(FormDataDao dao, Map<String, Object> parameters) {
-        // Get ALL statements first - use configured table name
+    private List<FormRow> fetchEnrichableStatements(FormDataDao dao, Map<String, Object> parameters) {
         String statementTable = DomainConstants.TABLE_BANK_STATEMENT;
-        String statusField = FrameworkConstants.FIELD_STATUS;
-        String newStatus = Status.CONSOLIDATED.getCode();
 
         int batchSize = 100;
         if (parameters != null && parameters.containsKey("batchSize")) {
@@ -101,53 +107,70 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
 
         FormRowSet statements = loadRecords(dao,
             statementTable,
-            null,  // No condition - get all
-            null,  // No params
-            "from_date",  // Sort by from_date
-            false,  // Ascending order
+            null,
+            null,
+            "from_date",
+            false,
             batchSize
         );
-        
-        // Filter for unprocessed statements
-        return filterByStatus(statements, statusField, newStatus);
+
+        List<FormRow> enrichable = new ArrayList<>();
+        if (statements != null) {
+            for (FormRow row : statements) {
+                String status = row.getProperty(FrameworkConstants.FIELD_STATUS);
+                if (Status.CONSOLIDATED.getCode().equals(status)
+                        || Status.ENRICHED.getCode().equals(status)) {
+                    enrichable.add(row);
+                }
+            }
+        }
+        LogUtil.info(CLASS_NAME, "Found " + enrichable.size()
+                + " enrichable statements (consolidated + enriched)");
+        return enrichable;
     }
     
     /**
-     * Fetch bank transactions for a specific statement
+     * Fetch bank transactions for a specific statement.
+     * Accepts NEW (first-time), ENRICHED and MANUAL_REVIEW (re-enrichment).
      */
     private List<DataContext> fetchBankTransactions(FormDataDao dao, FormRow statementRow) {
         List<DataContext> contexts = new ArrayList<>();
-        
+
         try {
             String statementId = statementRow.getId();
-            
-            // Get all bank transactions - use configured table name
-            String bankTable = DomainConstants.TABLE_BANK_TOTAL_TRX;
-            String statementIdField = DomainConstants.FIELD_STATEMENT_ID;
-            String statusField = FrameworkConstants.FIELD_STATUS;
-            String newStatus = Status.NEW.getCode();
-            
+
             FormRowSet bankTrxRows = loadRecords(dao,
-                bankTable,
-                null,  // Get all transactions
+                DomainConstants.TABLE_BANK_TOTAL_TRX,
+                null,
                 null,
                 "payment_date",
                 false,
-                10000  // Get all transactions
+                10000
             );
-            
-            // Filter for this statement's unprocessed transactions
-            Map<String, String> criteria = new HashMap<>();
-            criteria.put(statementIdField, statementId);
-            criteria.put(statusField, newStatus);
-            
-            List<FormRow> filteredRows = filterByCriteria(bankTrxRows, criteria);
-            
-            // Convert to contexts and transition to PROCESSING
-            for (FormRow trxRow : filteredRows) {
-                DataContext context = createBankDataContext(trxRow, statementRow);
-                transitionToProcessing(dao, EntityType.BANK_TRX, context.getTransactionId());
-                contexts.add(context);
+
+            Set<String> enrichableStatuses = new HashSet<>(Arrays.asList(
+                Status.NEW.getCode(),
+                Status.ENRICHED.getCode(),
+                Status.MANUAL_REVIEW.getCode()
+            ));
+
+            if (bankTrxRows != null) {
+                for (FormRow trxRow : bankTrxRows) {
+                    String trxStatementId = trxRow.getProperty(DomainConstants.FIELD_STATEMENT_ID);
+                    String trxStatus = trxRow.getProperty(FrameworkConstants.FIELD_STATUS);
+                    if (!statementId.equals(trxStatementId)) continue;
+                    if (!enrichableStatuses.contains(trxStatus)) continue;
+
+                    DataContext context = createBankDataContext(trxRow, statementRow);
+                    boolean isReEnrich = !Status.NEW.getCode().equals(trxStatus);
+                    context.setReEnrichment(isReEnrich);
+                    preLoadExistingEnrichment(context, dao);
+
+                    if (Status.NEW.getCode().equals(trxStatus)) {
+                        transitionToProcessing(dao, EntityType.BANK_TRX, context.getTransactionId());
+                    }
+                    contexts.add(context);
+                }
             }
 
         } catch (Exception e) {
@@ -158,41 +181,47 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
     }
     
     /**
-     * Fetch securities transactions for a specific statement
+     * Fetch securities transactions for a specific statement.
+     * Accepts NEW (first-time), ENRICHED and MANUAL_REVIEW (re-enrichment).
      */
     private List<DataContext> fetchSecuritiesTransactions(FormDataDao dao, FormRow statementRow) {
         List<DataContext> contexts = new ArrayList<>();
-        
+
         try {
             String statementId = statementRow.getId();
-            
-            // Get all securities transactions - use configured table name
-            String secuTable = DomainConstants.TABLE_SECU_TOTAL_TRX;
-            String statementIdField = DomainConstants.FIELD_STATEMENT_ID;
-            String statusField = FrameworkConstants.FIELD_STATUS;
-            String newStatus = Status.NEW.getCode();
-            
+
             FormRowSet secuTrxRows = loadRecords(dao,
-                secuTable,
-                null,  // Get all transactions
+                DomainConstants.TABLE_SECU_TOTAL_TRX,
+                null,
                 null,
                 "transaction_date",
                 false,
-                10000  // Get all transactions
+                10000
             );
-            
-            // Filter for this statement's unprocessed transactions
-            Map<String, String> criteria = new HashMap<>();
-            criteria.put(statementIdField, statementId);
-            criteria.put(statusField, newStatus);
-            
-            List<FormRow> filteredRows = filterByCriteria(secuTrxRows, criteria);
-            
-            // Convert to contexts and transition to PROCESSING
-            for (FormRow trxRow : filteredRows) {
-                DataContext context = createSecuritiesDataContext(trxRow, statementRow);
-                transitionToProcessing(dao, EntityType.SECU_TRX, context.getTransactionId());
-                contexts.add(context);
+
+            Set<String> enrichableStatuses = new HashSet<>(Arrays.asList(
+                Status.NEW.getCode(),
+                Status.ENRICHED.getCode(),
+                Status.MANUAL_REVIEW.getCode()
+            ));
+
+            if (secuTrxRows != null) {
+                for (FormRow trxRow : secuTrxRows) {
+                    String trxStatementId = trxRow.getProperty(DomainConstants.FIELD_STATEMENT_ID);
+                    String trxStatus = trxRow.getProperty(FrameworkConstants.FIELD_STATUS);
+                    if (!statementId.equals(trxStatementId)) continue;
+                    if (!enrichableStatuses.contains(trxStatus)) continue;
+
+                    DataContext context = createSecuritiesDataContext(trxRow, statementRow);
+                    boolean isReEnrich = !Status.NEW.getCode().equals(trxStatus);
+                    context.setReEnrichment(isReEnrich);
+                    preLoadExistingEnrichment(context, dao);
+
+                    if (Status.NEW.getCode().equals(trxStatus)) {
+                        transitionToProcessing(dao, EntityType.SECU_TRX, context.getTransactionId());
+                    }
+                    contexts.add(context);
+                }
             }
 
         } catch (Exception e) {
@@ -304,6 +333,91 @@ public class TransactionDataLoader extends AbstractDataLoader<DataContext> {
         return context;
     }
     
+    /**
+     * §9b: Pre-load existing enrichment data into context for idempotency guards.
+     * If a trx_enrichment record exists for this source transaction, its resolved
+     * fields are populated into context.additionalData so that step guards can
+     * detect already-resolved outputs and skip re-processing.
+     */
+    private void preLoadExistingEnrichment(DataContext context, FormDataDao dao) {
+        try {
+            String condition = "WHERE c_source_trx_id = ?";
+            FormRowSet rows = dao.find(null,
+                    DomainConstants.TABLE_TRX_ENRICHMENT,
+                    condition,
+                    new String[] { context.getTransactionId() },
+                    null, false, 0, 1);
+
+            if (rows == null || rows.isEmpty()) {
+                return;
+            }
+
+            FormRow enrichmentRow = rows.get(0);
+
+            // Check workspace protection — skip re-enrichment for records in workspace states
+            String enrichmentStatus = enrichmentRow.getProperty(FrameworkConstants.FIELD_STATUS);
+            context.setAdditionalDataValue("enrichment_status", enrichmentStatus);
+            if (WORKSPACE_PROTECTED_STATUSES.contains(enrichmentStatus)) {
+                context.setAdditionalDataValue("workspace_protected", "true");
+                LogUtil.info(CLASS_NAME, "Transaction " + context.getTransactionId()
+                        + " enrichment in workspace state " + enrichmentStatus + " — skipping");
+                return;
+            }
+
+            // Store existing record ID for upsert in persister
+            context.setAdditionalDataValue("existing_enrichment_id", enrichmentRow.getId());
+
+            // Reverse-map enrichment fields → additionalData keys
+            mapIfPresent(enrichmentRow, "resolved_customer_id", context, "customer_id");
+            mapIfPresent(enrichmentRow, "customer_match_method", context, "customer_identification_method");
+            mapIfPresent(enrichmentRow, "customer_code", context, "customer_code");
+            mapIfPresent(enrichmentRow, "customer_display_name", context, "customer_name");
+            mapIfPresent(enrichmentRow, "internal_type", context, "internal_type");
+            mapIfPresent(enrichmentRow, "matched_rule_id", context, "f14_rule_id");
+            mapIfPresent(enrichmentRow, "loan_id", context, "loan_id");
+            mapIfPresent(enrichmentRow, "loan_direction", context, "loan_direction");
+            mapIfPresent(enrichmentRow, "loan_resolution_method", context, "loan_resolution_method");
+            mapIfPresent(enrichmentRow, "fx_rate_to_eur", context, "fx_rate");
+            mapIfPresent(enrichmentRow, "fx_rate_date", context, "fx_rate_date");
+            mapIfPresent(enrichmentRow, "resolved_asset_id", context, "asset_id");
+
+            // Counterparty: check routed fields (counterparty_id, custodian_id, broker_id)
+            String cpId = enrichmentRow.getProperty("counterparty_id");
+            if (cpId == null || cpId.isEmpty()) cpId = enrichmentRow.getProperty("custodian_id");
+            if (cpId == null || cpId.isEmpty()) cpId = enrichmentRow.getProperty("broker_id");
+            if (cpId != null && !cpId.isEmpty()) {
+                context.setAdditionalDataValue("counterparty_id", cpId);
+            }
+
+            // Fields that also set context properties
+            String customerId = enrichmentRow.getProperty("resolved_customer_id");
+            if (customerId != null && !customerId.isEmpty()) {
+                context.setCustomerId(customerId);
+            }
+
+            String baseAmount = enrichmentRow.getProperty("base_amount_eur");
+            if (baseAmount != null && !baseAmount.isEmpty()) {
+                context.setAdditionalDataValue("base_amount", baseAmount);
+                context.setBaseAmount(baseAmount);
+            }
+
+            LogUtil.info(CLASS_NAME, "Pre-loaded existing enrichment " + enrichmentRow.getId()
+                    + " for transaction " + context.getTransactionId());
+
+        } catch (Exception e) {
+            LogUtil.error(CLASS_NAME, e,
+                    "Error pre-loading enrichment for transaction: " + context.getTransactionId());
+        }
+    }
+
+    private void mapIfPresent(FormRow source, String sourceField,
+                               DataContext context, String targetKey) {
+        String value = source.getProperty(sourceField);
+        if (value != null && !value.isEmpty()) {
+            context.setAdditionalDataValue(targetKey, value);
+        }
+    }
+
     /**
      * Sort transactions by date for proper processing order
      */

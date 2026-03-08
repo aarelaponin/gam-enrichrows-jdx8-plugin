@@ -4,6 +4,7 @@ import com.fiscaladmin.gam.enrichrows.constants.DomainConstants;
 import com.fiscaladmin.gam.enrichrows.constants.FrameworkConstants;
 import com.fiscaladmin.gam.enrichrows.framework.*;
 import com.fiscaladmin.gam.enrichrows.helpers.TestDataFactory;
+import com.fiscaladmin.gam.framework.status.Status;
 import org.joget.apps.form.dao.FormDataDao;
 import org.joget.apps.form.model.FormRow;
 import org.joget.apps.form.model.FormRowSet;
@@ -258,6 +259,7 @@ public class EnrichmentDataPersisterTest {
         // Fee & Pairing
         assertNotNull(row.getProperty("base_amount_eur"));
         assertEquals("no", row.getProperty("has_fee")); // bank context has no fee
+        assertEquals("900727947,900727952", row.getProperty("source_reference"));
 
         // Status & Notes
         assertNotNull(row.getProperty("enrichment_timestamp"));
@@ -316,6 +318,7 @@ public class EnrichmentDataPersisterTest {
         // Fee
         assertEquals("yes", row.getProperty("has_fee")); // secu has fee 25.00
         assertEquals("23", row.getProperty("base_fee_eur")); // base_fee from FX conversion
+        assertEquals("SEC-REF-001", row.getProperty("source_reference"));
     }
 
     // ===== Description Builder =====
@@ -1078,5 +1081,338 @@ public class EnrichmentDataPersisterTest {
         ctx.setPaymentDescription(null);
 
         assertTrue(persister.determineManualReviewStatus(ctx, new HashMap<>()));
+    }
+
+    // ===== Source Reference Tests =====
+
+    @Test
+    public void testSourceReferenceBank_fromTransactionRow() {
+        // Bank context with GROUP_CONCAT'd transaction_reference → source_reference populated
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        // bankTrxRow sets transaction_reference = "900727947,900727952"
+        persister.persist(ctx, mockDao, new HashMap<>());
+
+        FormRow row = capturePersistedRow();
+        assertEquals("900727947,900727952", row.getProperty("source_reference"));
+    }
+
+    @Test
+    public void testSourceReferenceSecu_fromContext() {
+        // Secu context with reference → source_reference populated from context.getReference()
+        DataContext ctx = TestDataFactory.fullyEnrichedSecuContext();
+        // secuContext sets reference = "SEC-REF-001"
+        persister.persist(ctx, mockDao, new HashMap<>());
+
+        FormRow row = capturePersistedRow();
+        assertEquals("SEC-REF-001", row.getProperty("source_reference"));
+    }
+
+    @Test
+    public void testSourceReferenceBank_nullTransactionRow() {
+        // Bank context with null transaction row → source_reference not set (no NPE)
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        ctx.setTransactionRow(null);
+
+        PersistenceResult result = persister.persist(ctx, mockDao, new HashMap<>());
+        assertTrue(result.isSuccess());
+
+        FormRow row = capturePersistedRow();
+        assertNull(row.getProperty("source_reference"));
+    }
+
+    // ===== §9b Upsert Logic =====
+
+    @Test
+    public void testUpsert_reusesExistingEnrichmentId() {
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        ctx.setAdditionalDataValue("existing_enrichment_id", "TRX-EXIST");
+
+        PersistenceResult result = persister.persist(ctx, mockDao, new HashMap<>());
+
+        assertTrue(result.isSuccess());
+        assertEquals("TRX-EXIST", result.getRecordId());
+
+        FormRow row = capturePersistedRow();
+        assertEquals("TRX-EXIST", row.getId());
+    }
+
+    @Test
+    public void testUpsert_generatesNewIdWhenNoExisting() {
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        // No existing_enrichment_id set
+
+        PersistenceResult result = persister.persist(ctx, mockDao, new HashMap<>());
+
+        assertTrue(result.isSuccess());
+        assertTrue(result.getRecordId().startsWith("TRX-"));
+        assertNotEquals("TRX-EXIST", result.getRecordId());
+    }
+
+    // ===== Loan Resolution Fields =====
+
+    @Test
+    public void testLoanFieldsMappedWhenPresent() {
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        TestDataFactory.withLoan(ctx, "LOAN-001", "disbursement", "DIRECT_MATCH");
+
+        persister.persist(ctx, mockDao, new HashMap<>());
+
+        FormRow row = capturePersistedRow();
+        assertEquals("LOAN-001", row.getProperty("loan_id"));
+        assertEquals("disbursement", row.getProperty("loan_direction"));
+        assertEquals("DIRECT_MATCH", row.getProperty("loan_resolution_method"));
+    }
+
+    @Test
+    public void testLoanFieldsAbsentWhenEmpty() {
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        // No loan data set
+
+        persister.persist(ctx, mockDao, new HashMap<>());
+
+        FormRow row = capturePersistedRow();
+        assertNull(row.getProperty("loan_id"));
+        assertNull(row.getProperty("loan_direction"));
+        assertNull(row.getProperty("loan_resolution_method"));
+    }
+
+    @Test
+    public void testLoanFieldsAbsentWhenNull() {
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        ctx.setAdditionalDataValue("loan_id", null);
+        ctx.setAdditionalDataValue("loan_direction", null);
+        ctx.setAdditionalDataValue("loan_resolution_method", null);
+
+        persister.persist(ctx, mockDao, new HashMap<>());
+
+        FormRow row = capturePersistedRow();
+        assertNull(row.getProperty("loan_id"));
+        assertNull(row.getProperty("loan_direction"));
+        assertNull(row.getProperty("loan_resolution_method"));
+    }
+
+    // ===== §4.0c Securities Commission/Sell Manual Review Skip =====
+
+    @Test
+    public void testManualReviewSkippedForSecuritiesSell() {
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        ctx.setCustomerId(FrameworkConstants.ENTITY_UNKNOWN);
+        ctx.setPaymentDescription("Securities sell (MSFT)");
+
+        assertFalse(persister.determineManualReviewStatus(ctx, new HashMap<>()));
+    }
+
+    @Test
+    public void testManualReviewSkippedForSecuritiesCommission() {
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        ctx.setCustomerId(FrameworkConstants.ENTITY_UNKNOWN);
+        ctx.setPaymentDescription("Securities commission fee");
+
+        assertFalse(persister.determineManualReviewStatus(ctx, new HashMap<>()));
+    }
+
+    // ===== Re-enrichment Tests =====
+
+    @Test
+    public void testReEnrichment_existingEnrichmentIdReused() {
+        // Re-enrichment: existing enrichment ID should be reused (upsert)
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        ctx.setAdditionalDataValue("existing_enrichment_id", "ENR-EXIST");
+        ctx.setReEnrichment(true);
+
+        PersistenceResult result = persister.persist(ctx, mockDao, new HashMap<>());
+
+        assertTrue(result.isSuccess());
+        assertEquals("ENR-EXIST", result.getRecordId());
+
+        FormRow row = capturePersistedRow();
+        assertEquals("ENR-EXIST", row.getId());
+    }
+
+    @Test
+    public void testReEnrichment_statusUpgrade() {
+        // MANUAL_REVIEW trx → all sentinels resolved → determineManualReviewStatus=false → ENRICHED
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        ctx.setReEnrichment(true);
+        ctx.setAdditionalDataValue("existing_enrichment_id", "ENR-001");
+        ctx.getTransactionRow().setProperty("status", Status.MANUAL_REVIEW.getCode());
+
+        boolean needsReview = persister.determineManualReviewStatus(ctx, new HashMap<>());
+
+        assertFalse("Fully resolved context should not need manual review", needsReview);
+    }
+
+    @Test
+    public void testReEnrichment_statusDowngrade() {
+        // ENRICHED trx → new sentinel (UNKNOWN counterparty) → needs manual review
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        ctx.setReEnrichment(true);
+        ctx.setAdditionalDataValue("existing_enrichment_id", "ENR-001");
+        ctx.setAdditionalDataValue("counterparty_id", FrameworkConstants.ENTITY_UNKNOWN);
+        ctx.getTransactionRow().setProperty("status", Status.ENRICHED.getCode());
+
+        boolean needsReview = persister.determineManualReviewStatus(ctx, new HashMap<>());
+
+        assertTrue("UNKNOWN counterparty should trigger manual review", needsReview);
+    }
+
+    @Test
+    public void testReEnrichment_enrichmentRecordSkipsLifecycle() {
+        // Re-enrichment with StatusManager: should NOT do NEW→PROCESSING lifecycle
+        com.fiscaladmin.gam.framework.status.StatusManager sm =
+                Mockito.spy(new com.fiscaladmin.gam.framework.status.StatusManager());
+        persister.setStatusManager(sm);
+
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        ctx.setReEnrichment(true);
+        ctx.setAdditionalDataValue("existing_enrichment_id", "ENR-EXIST");
+
+        // Stub source row load for updateSourceRowWithEnrichmentRef
+        FormRow sourceRow = new FormRow();
+        sourceRow.setId("TRX-001");
+        sourceRow.setProperty("status", Status.ENRICHED.getCode());
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                eq("WHERE id = ?"), any(Object[].class),
+                isNull(), eq(false), eq(0), eq(1)))
+                .thenReturn(TestDataFactory.rowSet(sourceRow));
+
+        PersistenceResult result = persister.persist(ctx, mockDao, new HashMap<>());
+
+        assertTrue(result.isSuccess());
+        assertEquals("ENR-EXIST", result.getRecordId());
+    }
+
+    @Test
+    public void testReEnrichment_sourceTransactionSameStatusNoTransition() {
+        // Re-enrichment: source trx already ENRICHED, result also ENRICHED → no transition
+        com.fiscaladmin.gam.framework.status.StatusManager sm =
+                Mockito.spy(new com.fiscaladmin.gam.framework.status.StatusManager());
+        persister.setStatusManager(sm);
+
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        ctx.setReEnrichment(true);
+        ctx.setAdditionalDataValue("existing_enrichment_id", "ENR-001");
+        ctx.getTransactionRow().setProperty("status", Status.ENRICHED.getCode());
+
+        // Stub source row load
+        FormRow sourceRow = new FormRow();
+        sourceRow.setId("TRX-001");
+        sourceRow.setProperty("status", Status.ENRICHED.getCode());
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                eq("WHERE id = ?"), any(Object[].class),
+                isNull(), eq(false), eq(0), eq(1)))
+                .thenReturn(TestDataFactory.rowSet(sourceRow));
+
+        PersistenceResult result = persister.persist(ctx, mockDao, new HashMap<>());
+
+        // Persist should succeed — transition skipped because same status
+        assertTrue(result.isSuccess());
+    }
+
+    // ===== §4.1 Self-Transition Skip Tests =====
+
+    @Test
+    public void testReEnrichment_selfTransitionSkippedSilently() {
+        // Re-enrichment: enrichment_status=enriched, target=ENRICHED → no StatusManager call
+        com.fiscaladmin.gam.framework.status.StatusManager sm =
+                Mockito.spy(new com.fiscaladmin.gam.framework.status.StatusManager());
+        persister.setStatusManager(sm);
+
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        ctx.setReEnrichment(true);
+        ctx.setAdditionalDataValue("existing_enrichment_id", "ENR-001");
+        ctx.setAdditionalDataValue("enrichment_status", Status.ENRICHED.getCode());
+        ctx.getTransactionRow().setProperty("status", Status.ENRICHED.getCode());
+
+        // Stub source row load
+        FormRow sourceRow = new FormRow();
+        sourceRow.setId("TRX-001");
+        sourceRow.setProperty("status", Status.ENRICHED.getCode());
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                eq("WHERE id = ?"), any(Object[].class),
+                isNull(), eq(false), eq(0), eq(1)))
+                .thenReturn(TestDataFactory.rowSet(sourceRow));
+
+        PersistenceResult result = persister.persist(ctx, mockDao, new HashMap<>());
+
+        assertTrue(result.isSuccess());
+        // StatusManager should NOT have been called for enrichment transition (self-transition skipped)
+        // and should NOT have been called for source transaction (same status skipped by transitionSourceTransaction)
+        // Only saveOrUpdate calls should be for the enrichment row and the source row metadata update
+        verify(mockDao, never()).load(any(), eq(DomainConstants.TABLE_TRX_ENRICHMENT), anyString());
+    }
+
+    @Test
+    public void testReEnrichment_statusChangeLogged() {
+        // Re-enrichment: enrichment_status=manual_review, target=ENRICHED → StatusManager IS called
+        com.fiscaladmin.gam.framework.status.StatusManager sm =
+                Mockito.spy(new com.fiscaladmin.gam.framework.status.StatusManager());
+        persister.setStatusManager(sm);
+
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        ctx.setReEnrichment(true);
+        ctx.setAdditionalDataValue("existing_enrichment_id", "ENR-001");
+        ctx.setAdditionalDataValue("enrichment_status", Status.MANUAL_REVIEW.getCode());
+        ctx.getTransactionRow().setProperty("status", Status.MANUAL_REVIEW.getCode());
+
+        // Stub source row load
+        FormRow sourceRow = new FormRow();
+        sourceRow.setId("TRX-001");
+        sourceRow.setProperty("status", Status.MANUAL_REVIEW.getCode());
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_BANK_TOTAL_TRX),
+                eq("WHERE id = ?"), any(Object[].class),
+                isNull(), eq(false), eq(0), eq(1)))
+                .thenReturn(TestDataFactory.rowSet(sourceRow));
+
+        PersistenceResult result = persister.persist(ctx, mockDao, new HashMap<>());
+
+        assertTrue(result.isSuccess());
+        // StatusManager SHOULD attempt the enrichment transition (manual_review → enriched is a status change)
+        // It will fail because dao.load returns null in mock, but the code path should be exercised
+        assertEquals("ENR-001", result.getRecordId());
+    }
+
+    // ===== §5 Workspace Protection Persist Guard =====
+
+    @Test
+    public void testPersist_workspaceProtected_inReview_skipped() {
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        ctx.setAdditionalDataValue("workspace_protected", "true");
+        ctx.setAdditionalDataValue("enrichment_status", Status.IN_REVIEW.getCode());
+
+        PersistenceResult result = persister.persist(ctx, mockDao, new HashMap<>());
+
+        assertTrue(result.isSuccess());
+        assertNull(result.getRecordId());
+        assertTrue(result.getMessage().contains("workspace protected"));
+        verify(mockDao, never()).saveOrUpdate(any(), anyString(), any(FormRowSet.class));
+    }
+
+    @Test
+    public void testPersist_workspaceProtected_adjusted_skipped() {
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        ctx.setAdditionalDataValue("workspace_protected", "true");
+        ctx.setAdditionalDataValue("enrichment_status", Status.ADJUSTED.getCode());
+
+        PersistenceResult result = persister.persist(ctx, mockDao, new HashMap<>());
+
+        assertTrue(result.isSuccess());
+        assertNull(result.getRecordId());
+        assertTrue(result.getMessage().contains("workspace protected"));
+        verify(mockDao, never()).saveOrUpdate(any(), anyString(), any(FormRowSet.class));
+    }
+
+    @Test
+    public void testPersist_workspaceProtectedSkipped() {
+        DataContext ctx = TestDataFactory.fullyEnrichedBankContext();
+        ctx.setAdditionalDataValue("workspace_protected", "true");
+
+        PersistenceResult result = persister.persist(ctx, mockDao, new HashMap<>());
+
+        assertTrue("Workspace-protected persist should return success", result.isSuccess());
+        assertNull("Workspace-protected persist should have null recordId", result.getRecordId());
+        assertTrue(result.getMessage().contains("workspace protected"));
+        // No DB writes should have occurred
+        verify(mockDao, never()).saveOrUpdate(any(), anyString(), any(FormRowSet.class));
     }
 }

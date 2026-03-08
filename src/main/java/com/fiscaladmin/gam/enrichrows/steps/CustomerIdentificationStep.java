@@ -34,10 +34,16 @@ public class CustomerIdentificationStep extends AbstractDataStep {
     // Confidence levels for different identification methods
     private static final int CONFIDENCE_DIRECT_ID = 100;
     private static final int CONFIDENCE_ACCOUNT_NUMBER = 95;
+    private static final int CONFIDENCE_CUSTOMER_ACCOUNT = 93;
     private static final int CONFIDENCE_REGISTRATION_NUMBER = 90;
+    private static final int CONFIDENCE_FUND_FALLBACK = 80;
     private static final int CONFIDENCE_NAME_MATCH = 70;
     private static final int CONFIDENCE_UNKNOWN = 0;
     private static final int DEFAULT_CONFIDENCE_THRESHOLD_HIGH = 80;
+
+    // CHANGES-08: Fund fallback cache — resolved once per enrichment run
+    private String cachedFundCustomerId = null;
+    private boolean fundCustomerLookedUp = false;
 
     @Override
     public String getStepName() {
@@ -95,7 +101,17 @@ public class CustomerIdentificationStep extends AbstractDataStep {
                 }
             }
 
-            // Method 3: Registration number extraction from reference/description
+            // Method 3: Customer account lookup (other_side_account → customer_account → customerId)
+            if (customerId == null) {
+                customerId = identifyByCustomerAccount(context, formDataDao);
+                if (customerId != null) {
+                    confidenceLevel = CONFIDENCE_CUSTOMER_ACCOUNT;
+                    identificationMethod = "CUSTOMER_ACCOUNT";
+                    LogUtil.info(CLASS_NAME, "Customer identified by customer account: " + customerId);
+                }
+            }
+
+            // Method 4: Registration number extraction from reference/description
             if (customerId == null) {
                 customerId = identifyByRegistrationNumber(context, formDataDao);
                 if (customerId != null) {
@@ -106,13 +122,23 @@ public class CustomerIdentificationStep extends AbstractDataStep {
                 }
             }
 
-            // Method 4: Name pattern matching (lower confidence)
+            // Method 5: Name pattern matching (lower confidence)
             if (customerId == null) {
                 customerId = identifyByNamePattern(context, formDataDao);
                 if (customerId != null) {
                     confidenceLevel = CONFIDENCE_NAME_MATCH;
                     identificationMethod = "NAME_PATTERN";
                     LogUtil.info(CLASS_NAME, "Customer identified by name pattern: " + customerId);
+                }
+            }
+
+            // Method 6 (CHANGES-08): Fund fallback — no counterparty means fund-level transaction
+            if (customerId == null) {
+                customerId = identifyAsFundTransaction(context, formDataDao);
+                if (customerId != null) {
+                    confidenceLevel = CONFIDENCE_FUND_FALLBACK;
+                    identificationMethod = "FUND_FALLBACK";
+                    LogUtil.info(CLASS_NAME, "No counterparty — assigned to fund customer: " + customerId);
                 }
             }
 
@@ -214,6 +240,10 @@ public class CustomerIdentificationStep extends AbstractDataStep {
 
     @Override
     public boolean shouldExecute(DataContext context) {
+        // §9b: Skip if customer already resolved (UNKNOWN = re-evaluate)
+        if (isFieldResolved(context, "customer_id", FrameworkConstants.ENTITY_UNKNOWN)) {
+            return false;
+        }
         // Bank only: secu transactions have no customer data (investment bank acts on behalf of customers).
         // Customer-to-portfolio allocation for secu is a manual operations process.
         if (!"bank".equals(context.getSourceType())) {
@@ -439,6 +469,98 @@ public class CustomerIdentificationStep extends AbstractDataStep {
     }
 
     /**
+     * Method 3: Identify customer via customer_account table.
+     * Maps other_side_account (counterparty IBAN) → customer_account.accountNumber → customerId.
+     */
+    private String identifyByCustomerAccount(DataContext context, FormDataDao formDataDao) {
+        String otherSideAccount = context.getOtherSideAccount();
+        if (otherSideAccount == null || otherSideAccount.trim().isEmpty()) {
+            return null;
+        }
+
+        otherSideAccount = otherSideAccount.trim();
+        LogUtil.info(CLASS_NAME, "Looking up customer by customer_account for IBAN: " + otherSideAccount);
+
+        try {
+            String condition = "WHERE c_accountNumber = ? AND c_status = 'Active'";
+            FormRowSet rows = formDataDao.find(null,
+                    DomainConstants.TABLE_CUSTOMER_ACCOUNT,
+                    condition,
+                    new String[] { otherSideAccount },
+                    null, false, 0, 1);
+
+            if (rows != null && !rows.isEmpty()) {
+                String customerId = rows.get(0).getProperty("customerId");
+                if (customerId != null && !customerId.trim().isEmpty()) {
+                    LogUtil.info(CLASS_NAME,
+                            "Found customer via customer_account: " + customerId + " for IBAN: " + otherSideAccount);
+                    return customerId;
+                }
+            }
+        } catch (Exception e) {
+            LogUtil.error(CLASS_NAME, e, "Error searching customer_account by IBAN: " + otherSideAccount);
+        }
+
+        return null;
+    }
+
+    /**
+     * CHANGES-08: Method 6 — Fund fallback.
+     *
+     * When a transaction has no counterparty (no other_side_account), the transaction
+     * is a fund-level operational event: bank fee, account interest, FX conversion,
+     * bond coupon via broker, VAT, etc. The customer is the fund itself.
+     *
+     * The fund is identified by the is_fund flag on the customer form, which is
+     * constrained by DuplicateValueValidator to exactly one customer entity.
+     * The result is cached for the duration of the enrichment run.
+     *
+     * @return fund customerId, or null if counterparty is present or no fund entity exists
+     */
+    private String identifyAsFundTransaction(DataContext context, FormDataDao formDataDao) {
+        // Only applies when there is NO counterparty
+        String otherSideAccount = context.getOtherSideAccount();
+        if (otherSideAccount != null && !otherSideAccount.trim().isEmpty()) {
+            return null;  // Has counterparty — not a fund-level transaction
+        }
+
+        // Return cached result if already looked up in this run
+        if (fundCustomerLookedUp) {
+            return cachedFundCustomerId;
+        }
+
+        fundCustomerLookedUp = true;
+
+        try {
+            // Full table scan + Java filter (avoids SQL column dependency on c_is_fund
+            // which would poison the JTA transaction if the column doesn't exist yet)
+            FormRowSet rows = formDataDao.find(null,
+                    DomainConstants.TABLE_CUSTOMER_MASTER,
+                    null, null, null, null, null, null);
+
+            if (rows != null) {
+                for (FormRow row : rows) {
+                    String isFund = row.getProperty("is_fund");
+                    if ("yes".equalsIgnoreCase(isFund)) {
+                        cachedFundCustomerId = row.getId();
+                        LogUtil.info(CLASS_NAME,
+                                "Fund customer resolved: " + cachedFundCustomerId
+                                + " (is_fund=yes)");
+                        return cachedFundCustomerId;
+                    }
+                }
+            }
+
+            LogUtil.warn(CLASS_NAME, "No fund customer found (is_fund=yes). "
+                    + "Fund fallback will not resolve any transactions this run.");
+        } catch (Exception e) {
+            LogUtil.error(CLASS_NAME, e, "Error querying fund customer (is_fund=yes)");
+        }
+
+        return null;
+    }
+
+    /**
      * Resolve customer from a customer_account row using business key chain:
      * corporateCustomerId -> customer.registrationNumber
      * individualCustomerId -> customer.personalId
@@ -474,7 +596,7 @@ public class CustomerIdentificationStep extends AbstractDataStep {
     }
 
     /**
-     * Method 3: Identify customer by registration number extracted from reference/description
+     * Method 4: Identify customer by registration number extracted from reference/description
      * This is different from Method 1 - here we're extracting registration numbers from text fields
      */
     private String identifyByRegistrationNumber(DataContext context, FormDataDao formDataDao) {
@@ -496,7 +618,7 @@ public class CustomerIdentificationStep extends AbstractDataStep {
     }
 
     /**
-     * Method 4: Identify customer by name pattern matching
+     * Method 5: Identify customer by name pattern matching
      */
     private String identifyByNamePattern(DataContext context, FormDataDao formDataDao) {
         String searchName = null;

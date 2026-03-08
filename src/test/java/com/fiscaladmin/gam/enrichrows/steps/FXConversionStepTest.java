@@ -112,4 +112,125 @@ public class FXConversionStepTest {
         ctx.setErrorMessage("previous error");
         assertFalse(step.shouldExecute(ctx));
     }
+
+    // =========================================================================
+    // Securities FX conversion tests
+    // =========================================================================
+
+    @Test
+    public void testSecuFeeConversion() {
+        // FX rate: 1 EUR = 1.08 USD → USD→EUR = 1/1.08
+        FormRowSet rates = TestDataFactory.rowSet(
+                TestDataFactory.fxRateRow("USD", "2026-01-15", "1.08", "active")
+        );
+        when(mockDao.find(isNull(), eq("fx_rates_eur"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(rates);
+
+        DataContext ctx = TestDataFactory.secuContext(); // USD, fee=25.00
+        ctx.setTransactionDate("2026-01-15");
+
+        StepResult result = step.execute(ctx, mockDao);
+
+        assertTrue(result.isSuccess());
+        // Fee should be converted: 25.00 / 1.08 ≈ 23.15
+        String baseFee = (String) ctx.getAdditionalDataValue("base_fee");
+        assertNotNull("base_fee should be set for secu transactions", baseFee);
+        double baseFeeVal = Double.parseDouble(baseFee);
+        assertTrue("base_fee should be ~23.15", baseFeeVal > 23.0 && baseFeeVal < 24.0);
+    }
+
+    @Test
+    public void testSecuTotalAmountConversion() {
+        FormRowSet rates = TestDataFactory.rowSet(
+                TestDataFactory.fxRateRow("USD", "2026-01-15", "1.08", "active")
+        );
+        when(mockDao.find(isNull(), eq("fx_rates_eur"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(rates);
+
+        DataContext ctx = TestDataFactory.secuContext(); // USD, totalAmount=50025.00
+        ctx.setTransactionDate("2026-01-15");
+
+        StepResult result = step.execute(ctx, mockDao);
+
+        assertTrue(result.isSuccess());
+        // Total amount should be converted: 50025.00 / 1.08 ≈ 46319.44
+        String baseTotalAmount = (String) ctx.getAdditionalDataValue("base_total_amount");
+        assertNotNull("base_total_amount should be set for secu transactions", baseTotalAmount);
+        double baseTotalVal = Double.parseDouble(baseTotalAmount);
+        assertTrue("base_total_amount should be ~46319", baseTotalVal > 46000.0 && baseTotalVal < 47000.0);
+    }
+
+    @Test
+    public void testRateInversion() {
+        // Rate stored as "1 EUR = 1.08 USD", so USD→EUR should use 1/1.08
+        FormRowSet rates = TestDataFactory.rowSet(
+                TestDataFactory.fxRateRow("USD", "2026-01-15", "1.08", "active")
+        );
+        when(mockDao.find(isNull(), eq("fx_rates_eur"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(rates);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        ctx.setCurrency("USD");
+        ctx.setAmount("108.00");
+        ctx.setTransactionDate("2026-01-15");
+
+        StepResult result = step.execute(ctx, mockDao);
+
+        assertTrue(result.isSuccess());
+        // 108 USD / 1.08 = 100 EUR
+        double baseAmount = Double.parseDouble(ctx.getBaseAmount());
+        assertEquals(100.0, baseAmount, 0.01);
+    }
+
+    @Test
+    public void testMultipleRatesSameDate_usesFirst() {
+        // Two rates for same currency and date — first match wins
+        FormRowSet rates = TestDataFactory.rowSet(
+                TestDataFactory.fxRateRow("GBP", "2026-01-15", "0.85", "active"),
+                TestDataFactory.fxRateRow("GBP", "2026-01-15", "0.90", "active")
+        );
+        when(mockDao.find(isNull(), eq("fx_rates_eur"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(rates);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        ctx.setCurrency("GBP");
+        ctx.setAmount("85.00");
+        ctx.setTransactionDate("2026-01-15");
+
+        StepResult result = step.execute(ctx, mockDao);
+
+        assertTrue(result.isSuccess());
+        // Should use first rate: 85 / 0.85 = 100 EUR
+        double baseAmount = Double.parseDouble(ctx.getBaseAmount());
+        assertEquals(100.0, baseAmount, 0.01);
+    }
+
+    // =========================================================================
+    // §9b Idempotency guard tests
+    // =========================================================================
+
+    @Test
+    public void testIdempotency_skipsNonZero() {
+        DataContext ctx = TestDataFactory.bankContext();
+        ctx.setAdditionalDataValue("base_amount", "920.00");
+        assertFalse("Should skip when base_amount is non-zero", step.shouldExecute(ctx));
+    }
+
+    @Test
+    public void testIdempotency_reEvaluatesZero() {
+        DataContext ctx = TestDataFactory.bankContext();
+        ctx.setAdditionalDataValue("base_amount", "0.0");
+        assertTrue("Should re-evaluate when base_amount is zero", step.shouldExecute(ctx));
+    }
+
+    @Test
+    public void testIdempotency_reEvaluatesNull() {
+        DataContext ctx = TestDataFactory.bankContext();
+        // No base_amount set → should execute
+        assertTrue("Should execute when base_amount is null", step.shouldExecute(ctx));
+    }
 }

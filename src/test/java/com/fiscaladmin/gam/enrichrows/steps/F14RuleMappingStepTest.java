@@ -6,6 +6,7 @@ import com.fiscaladmin.gam.enrichrows.framework.DataContext;
 import com.fiscaladmin.gam.enrichrows.framework.StepResult;
 import com.fiscaladmin.gam.enrichrows.helpers.TestDataFactory;
 import org.joget.apps.form.dao.FormDataDao;
+import org.joget.apps.form.model.FormRow;
 import org.joget.apps.form.model.FormRowSet;
 import org.junit.Before;
 import org.junit.Test;
@@ -229,11 +230,100 @@ public class F14RuleMappingStepTest {
     }
 
     @Test
+    public void testEffectiveDateFiltering() {
+        // Rule with future effective date should be excluded from matching
+        FormRow futureRule = TestDataFactory.f14RuleRow("R1", "CPT0143", "bank",
+                "payment_description", "contains", "wire",
+                "WIRE_TRANSFER", 1);
+        futureRule.setProperty("effectiveDate", "2099-01-01"); // future date
+
+        FormRowSet rules = TestDataFactory.rowSet(futureRule);
+        when(mockDao.find(isNull(), eq("cp_txn_mapping"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(rules);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        TestDataFactory.withCounterparty(ctx, "CPT0143", "Bank");
+        ctx.setPaymentDescription("Wire transfer payment");
+
+        StepResult result = step.execute(ctx, mockDao);
+
+        assertTrue(result.isSuccess());
+        // Rule should be filtered out due to future effective date → UNMATCHED
+        assertEquals(FrameworkConstants.INTERNAL_TYPE_UNMATCHED,
+                ctx.getAdditionalDataValue("internal_type"));
+    }
+
+    @Test
+    public void testInOperator() {
+        // Rule with "in" operator: field value should match one of comma-separated values
+        FormRowSet rules = TestDataFactory.rowSet(
+                TestDataFactory.f14RuleRow("R1", "CPT0143", "bank",
+                        "d_c", "in", "C,D",
+                        "PAYMENT", 1)
+        );
+        when(mockDao.find(isNull(), eq("cp_txn_mapping"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(rules);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        TestDataFactory.withCounterparty(ctx, "CPT0143", "Bank");
+        ctx.setDebitCredit("C");
+
+        StepResult result = step.execute(ctx, mockDao);
+
+        assertTrue(result.isSuccess());
+        assertEquals("PAYMENT", ctx.getAdditionalDataValue("internal_type"));
+    }
+
+    @Test
+    public void testActiveStatusFiltering() {
+        // Inactive rule should be excluded from matching
+        FormRow inactiveRule = TestDataFactory.f14RuleRow("R1", "CPT0143", "bank",
+                "payment_description", "contains", "wire",
+                "WIRE_TRANSFER", 1);
+        inactiveRule.setProperty("status", "Inactive");
+
+        FormRowSet rules = TestDataFactory.rowSet(inactiveRule);
+        when(mockDao.find(isNull(), eq("cp_txn_mapping"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(rules);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        TestDataFactory.withCounterparty(ctx, "CPT0143", "Bank");
+        ctx.setPaymentDescription("Wire transfer payment");
+
+        StepResult result = step.execute(ctx, mockDao);
+
+        assertTrue(result.isSuccess());
+        assertEquals(FrameworkConstants.INTERNAL_TYPE_UNMATCHED,
+                ctx.getAdditionalDataValue("internal_type"));
+    }
+
+    @Test
     public void testShouldExecuteSkipsOnError() {
         DataContext ctx = TestDataFactory.bankContext();
         assertTrue(step.shouldExecute(ctx));
 
         ctx.setErrorMessage("previous error");
         assertFalse(step.shouldExecute(ctx));
+    }
+
+    // =========================================================================
+    // §9b Idempotency guard tests
+    // =========================================================================
+
+    @Test
+    public void testIdempotency_skipsClassified() {
+        DataContext ctx = TestDataFactory.bankContext();
+        TestDataFactory.withF14(ctx, "INT_INCOME", "RULE-001");
+        assertFalse("Should skip when type already classified", step.shouldExecute(ctx));
+    }
+
+    @Test
+    public void testIdempotency_reEvaluatesUnmatched() {
+        DataContext ctx = TestDataFactory.bankContext();
+        TestDataFactory.withF14(ctx, "UNMATCHED", "RULE-001");
+        assertTrue("Should re-evaluate when type is UNMATCHED", step.shouldExecute(ctx));
     }
 }

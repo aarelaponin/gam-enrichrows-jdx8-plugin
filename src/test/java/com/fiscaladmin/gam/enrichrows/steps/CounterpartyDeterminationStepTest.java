@@ -183,11 +183,135 @@ public class CounterpartyDeterminationStepTest {
     }
 
     @Test
+    public void testOtherSideDataStored() {
+        // Bank transactions should store other_side_bic and other_side_name in additionalData
+        FormRowSet counterparties = TestDataFactory.rowSet(
+                TestDataFactory.counterpartyRow("rec-1", "CPT0143", "Bank", "BARCGB22", true)
+        );
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_COUNTERPARTY_MASTER),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(counterparties);
+        when(mockDao.find(isNull(), eq("bank"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(TestDataFactory.emptyRowSet());
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_COUNTERPARTY_MASTER),
+                eq("WHERE c_counterpartyId = ?"), any(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(counterparties);
+
+        DataContext ctx = TestDataFactory.bankContext(); // has otherSideBic=DEUTDEFF, otherSideName=Deutsche Bank AG
+        StepResult result = step.execute(ctx, mockDao);
+
+        assertTrue(result.isSuccess());
+        assertEquals("DEUTDEFF", ctx.getAdditionalDataValue("other_side_bic"));
+        assertEquals("Deutsche Bank AG", ctx.getAdditionalDataValue("other_side_name"));
+    }
+
+    @Test
+    public void testShortCodeStored() {
+        // After counterparty resolved, short code should be stored in additionalData
+        FormRowSet counterparties = TestDataFactory.rowSet(
+                TestDataFactory.counterpartyRow("rec-1", "CPT0143", "Bank", "BARCGB22", true)
+        );
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_COUNTERPARTY_MASTER),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(counterparties);
+        when(mockDao.find(isNull(), eq("bank"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(TestDataFactory.emptyRowSet());
+        // Short code lookup: counterpartyRow sets shortCode = "CPT0" (first 4 chars)
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_COUNTERPARTY_MASTER),
+                eq("WHERE c_counterpartyId = ?"), any(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(counterparties);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        StepResult result = step.execute(ctx, mockDao);
+
+        assertTrue(result.isSuccess());
+        assertNotNull("counterparty_short_code should be stored",
+                ctx.getAdditionalDataValue("counterparty_short_code"));
+        assertEquals("CPT0", ctx.getAdditionalDataValue("counterparty_short_code"));
+    }
+
+    @Test
     public void testShouldExecuteSkipsOnError() {
         DataContext ctx = TestDataFactory.bankContext();
         assertTrue(step.shouldExecute(ctx));
 
         ctx.setErrorMessage("previous error");
         assertFalse(step.shouldExecute(ctx));
+    }
+
+    // =========================================================================
+    // §9b Idempotency guard tests
+    // =========================================================================
+
+    @Test
+    public void testIdempotency_skipsResolved() {
+        DataContext ctx = TestDataFactory.bankContext();
+        TestDataFactory.withCounterparty(ctx, "CPT0143", "Bank");
+        assertFalse("Should skip when counterparty already resolved", step.shouldExecute(ctx));
+    }
+
+    @Test
+    public void testIdempotency_skipsEvenUnknown() {
+        DataContext ctx = TestDataFactory.bankContext();
+        TestDataFactory.withCounterparty(ctx, "UNKNOWN", "Bank");
+        assertFalse("Should skip even when counterparty is UNKNOWN (no sentinel)", step.shouldExecute(ctx));
+    }
+
+    // =========================================================================
+    // English Transaction Type Tests
+    // =========================================================================
+
+    @Test
+    public void testEnglishBuyType() {
+        DataContext ctx = executeSecuWithType("BUY");
+        assertEquals("Broker", ctx.getAdditionalDataValue("counterparty_type"));
+    }
+
+    @Test
+    public void testEnglishSellType() {
+        DataContext ctx = executeSecuWithType("SELL");
+        assertEquals("Broker", ctx.getAdditionalDataValue("counterparty_type"));
+    }
+
+    @Test
+    public void testEnglishTradeType() {
+        DataContext ctx = executeSecuWithType("TRADE");
+        assertEquals("Broker", ctx.getAdditionalDataValue("counterparty_type"));
+    }
+
+    @Test
+    public void testEnglishCustodyType() {
+        DataContext ctx = executeSecuWithType("CUSTODY");
+        assertEquals("Custodian", ctx.getAdditionalDataValue("counterparty_type"));
+    }
+
+    @Test
+    public void testEnglishDividendType() {
+        DataContext ctx = executeSecuWithType("DIVIDEND");
+        assertEquals("Custodian", ctx.getAdditionalDataValue("counterparty_type"));
+    }
+
+    // =========================================================================
+    // Edge Cases — null, empty, unknown transaction types
+    // =========================================================================
+
+    @Test
+    public void testNullTransactionType() {
+        DataContext ctx = executeSecuWithType(null);
+        assertEquals("Custodian", ctx.getAdditionalDataValue("counterparty_type"));
+    }
+
+    @Test
+    public void testEmptyTransactionType() {
+        DataContext ctx = executeSecuWithType("");
+        assertEquals("Custodian", ctx.getAdditionalDataValue("counterparty_type"));
+    }
+
+    @Test
+    public void testUnknownTransactionType() {
+        DataContext ctx = executeSecuWithType("UNKNOWN_TYPE");
+        assertEquals("Custodian", ctx.getAdditionalDataValue("counterparty_type"));
     }
 }

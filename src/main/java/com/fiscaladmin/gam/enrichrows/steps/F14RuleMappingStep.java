@@ -160,6 +160,10 @@ public class F14RuleMappingStep extends AbstractDataStep {
 
     @Override
     public boolean shouldExecute(DataContext context) {
+        // §9b: Skip if type already classified (UNMATCHED = re-evaluate)
+        if (isFieldResolved(context, "internal_type", FrameworkConstants.INTERNAL_TYPE_UNMATCHED)) {
+            return false;
+        }
         // Execute for all transactions that haven't failed yet
         return context.getErrorMessage() == null || context.getErrorMessage().isEmpty();
     }
