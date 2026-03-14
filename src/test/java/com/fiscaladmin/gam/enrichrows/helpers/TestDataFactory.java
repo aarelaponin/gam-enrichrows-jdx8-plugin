@@ -287,6 +287,22 @@ public class TestDataFactory {
         return ctx;
     }
 
+    public static DataContext bankDividendContext(String ticker) {
+        DataContext ctx = bankContext();
+        ctx.setPaymentDescription("Dividends (" + ticker + ")");
+        ctx.setCurrency("USD");
+        withF14(ctx, "DIV_INCOME", "RULE-DIV");
+        return ctx;
+    }
+
+    public static DataContext bankIncomeTaxContext(String ticker) {
+        DataContext ctx = bankContext();
+        ctx.setPaymentDescription("Income tax withheld (" + ticker + ") (01.07.2024)");
+        ctx.setCurrency("USD");
+        withF14(ctx, "INCOME_TAX", "RULE-TAX");
+        return ctx;
+    }
+
     public static DataContext fullyEnrichedBankContext() {
         DataContext ctx = bankContext();
         withCounterparty(ctx, "CPT0143", "Bank");

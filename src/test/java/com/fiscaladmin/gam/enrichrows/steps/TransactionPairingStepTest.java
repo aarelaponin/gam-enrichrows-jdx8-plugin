@@ -51,15 +51,15 @@ public class TransactionPairingStepTest {
 
     @Test
     public void testExtractTickerFromDescriptionNestedParens() {
-        // indexOf('(') picks the first opening paren
+        // TickerExtractor picks the first valid alphanumeric paren group, uppercased
         String ticker = step.extractTickerFromDescription("Securities (buy) order (MSFT)");
-        assertEquals("buy", ticker);
+        assertEquals("BUY", ticker);
     }
 
     @Test
     public void testExtractTickerFromDescriptionEmptyParens() {
         String ticker = step.extractTickerFromDescription("Securities buy ()");
-        assertEquals("", ticker);
+        assertNull(ticker);
     }
 
     @Test
@@ -226,9 +226,9 @@ public class TransactionPairingStepTest {
 
     @Test
     public void testExecutePairingWithFeeRecord() {
-        // Secu + bank principal + bank fee → combo amount = principal + fee
+        // Two-phase: secu principal matches bank principal, fee matched separately
         FormRowSet records = new FormRowSet();
-        FormRow secuRow = enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50025.00");
+        FormRow secuRow = enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00", "yes", "-25.00");
         secuRow.setProperty("source_reference", "REF-001");
         records.add(secuRow);
 
@@ -587,10 +587,10 @@ public class TransactionPairingStepTest {
     }
 
     @Test
-    public void testExecutePairingComboMatchPrincipalPlusFee() {
-        // Secu=10182.03, principal=10167.80, fee=14.23 → combo matches
+    public void testExecutePairingTwoPhaseWithFee() {
+        // Two-phase: secu principal=-10167.80 matches bank, fee=-14.23 matched separately
         FormRowSet records = new FormRowSet();
-        records.add(enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-10182.03"));
+        records.add(enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-10167.80", "yes", "-14.23"));
         records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-10167.80", "SEC_BUY"));
         records.add(enrichedBankRow("BANK-002", "Securities commission fee (AAPL)", "2026-01-19", "-14.23", "COMM_FEE"));
 
@@ -683,6 +683,22 @@ public class TransactionPairingStepTest {
     }
 
     /**
+     * Create an enriched secu F01.05 row with has_fee and fee_amount for Phase 2 tests.
+     */
+    private FormRow enrichedSecuRow(String id, String resolvedAssetId, String settlementDate,
+                                     String amount, String hasFee, String feeAmount) {
+        FormRow row = enrichedSecuRow(id, resolvedAssetId, settlementDate, amount);
+        row.setProperty("has_fee", hasFee);
+        row.setProperty("fee_amount", feeAmount);
+        // Set total_amount = |principal| + |fee| (with same sign as principal) so Signal 3 works
+        double principal = Double.parseDouble(amount.replaceAll("[^0-9.\\-]", ""));
+        double fee = Math.abs(Double.parseDouble(feeAmount.replaceAll("[^0-9.\\-]", "")));
+        double total = principal < 0 ? principal - fee : principal + fee;
+        row.setProperty("total_amount", String.format("%.2f", total));
+        return row;
+    }
+
+    /**
      * Create an enriched bank F01.05 row with explicit internal_type.
      */
     private FormRow enrichedBankRow(String id, String description, String date,
@@ -704,5 +720,330 @@ public class TransactionPairingStepTest {
      */
     private FormRow enrichedBankRow(String id, String description, String date, String amount) {
         return enrichedBankRow(id, description, date, amount, "SEC_BUY");
+    }
+
+    // ===== Two-phase pairing tests (T1-T10) =====
+
+    @Test
+    public void testT1_NoFeeSecuPairsPrincipalOnly() {
+        // T1: Secu without has_fee pairs principal only; COMM_FEE stays orphaned
+        FormRowSet records = new FormRowSet();
+        records.add(enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00"));
+        records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+        records.add(enrichedBankRow("BANK-002", "Securities commission fee (AAPL)", "2026-01-19", "-25.00", "COMM_FEE"));
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(records);
+
+        int pairs = step.executePairing(mockDao);
+        assertEquals(1, pairs);
+
+        // Verify pair record has no fee (Phase 2 skipped because no has_fee)
+        ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
+        verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
+        FormRow pairRow = captor.getValue().get(0);
+        assertEquals("no", pairRow.getProperty("has_fee"));
+    }
+
+    @Test
+    public void testT2_HasFeeWithCommFeeSameDate() {
+        // T2: has_fee=yes + COMM_FEE same date → full pair
+        FormRowSet records = new FormRowSet();
+        records.add(enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00", "yes", "-25.00"));
+        records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+        records.add(enrichedBankRow("BANK-002", "Securities commission fee (AAPL)", "2026-01-19", "-25.00", "COMM_FEE"));
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(records);
+
+        int pairs = step.executePairing(mockDao);
+        assertEquals(1, pairs);
+
+        ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
+        verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
+        FormRow pairRow = captor.getValue().get(0);
+        assertEquals("yes", pairRow.getProperty("has_fee"));
+        assertEquals("BANK-002", pairRow.getProperty("bank_fee_enrichment_id"));
+    }
+
+    @Test
+    public void testT3_HasFeeWithCommFeeAtTPlus1() {
+        // T3: has_fee=yes + COMM_FEE at T+1 → full pair
+        FormRowSet records = new FormRowSet();
+        records.add(enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00", "yes", "-25.00"));
+        records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+        records.add(enrichedBankRow("BANK-002", "Securities commission fee (AAPL)", "2026-01-20", "-25.00", "COMM_FEE"));
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(records);
+
+        int pairs = step.executePairing(mockDao);
+        assertEquals(1, pairs);
+    }
+
+    @Test
+    public void testT4_HasFeeWithCommFeeAtTPlus2() {
+        // T4: has_fee=yes + COMM_FEE at T+2 → full pair
+        FormRowSet records = new FormRowSet();
+        records.add(enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00", "yes", "-25.00"));
+        records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+        records.add(enrichedBankRow("BANK-002", "Securities commission fee (AAPL)", "2026-01-21", "-25.00", "COMM_FEE"));
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(records);
+
+        int pairs = step.executePairing(mockDao);
+        assertEquals(1, pairs);
+    }
+
+    @Test
+    public void testT5_HasFeeNoCommFeeDeferred() {
+        // T5: has_fee=yes but no COMM_FEE available → NOT paired (deferred)
+        FormRowSet records = new FormRowSet();
+        records.add(enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00", "yes", "-25.00"));
+        records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(records);
+
+        int pairs = step.executePairing(mockDao);
+        assertEquals(0, pairs);
+
+        // No pair record should be created
+        verify(mockDao, never()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), any(FormRowSet.class));
+    }
+
+    @Test
+    public void testT6_TwoCommFeesDisambiguatedByTicker() {
+        // T6: Two COMM_FEE same amount, disambiguated by ticker
+        FormRowSet records = new FormRowSet();
+        FormRow secuRow = enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00", "yes", "-25.00");
+        secuRow.setProperty("bank_asset_hint_ticker", "AAPL");
+        records.add(secuRow);
+
+        records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+        records.add(enrichedBankRow("BANK-002", "Securities commission fee (AAPL)", "2026-01-19", "-25.00", "COMM_FEE"));
+        records.add(enrichedBankRow("BANK-003", "Securities commission fee (MSFT)", "2026-01-19", "-25.00", "COMM_FEE"));
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(records);
+
+        int pairs = step.executePairing(mockDao);
+        assertEquals(1, pairs);
+
+        // Verify fee matched AAPL, not MSFT
+        ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
+        verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
+        FormRow pairRow = captor.getValue().get(0);
+        assertEquals("BANK-002", pairRow.getProperty("bank_fee_enrichment_id"));
+    }
+
+    @Test
+    public void testT7_TwoCommFeesNoTickerAmbiguous() {
+        // T7: Two COMM_FEE same amount, no ticker → NOT paired (ambiguous)
+        FormRowSet records = new FormRowSet();
+        records.add(enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00", "yes", "-25.00"));
+        records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+        records.add(enrichedBankRow("BANK-002", "Securities commission fee (AAPL)", "2026-01-19", "-25.00", "COMM_FEE"));
+        records.add(enrichedBankRow("BANK-003", "Securities commission fee (MSFT)", "2026-01-19", "-25.00", "COMM_FEE"));
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(records);
+
+        int pairs = step.executePairing(mockDao);
+        assertEquals(0, pairs);
+    }
+
+    @Test
+    public void testT8_DeferredRun1PairedRun2() {
+        // T8: Run 1 deferred (no fee), Run 2 fee arrives → paired
+        // Run 1: has_fee=yes but no COMM_FEE → deferred
+        FormRowSet run1Records = new FormRowSet();
+        run1Records.add(enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00", "yes", "-25.00"));
+        run1Records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(run1Records);
+
+        int run1Pairs = step.executePairing(mockDao);
+        assertEquals(0, run1Pairs);
+
+        // Run 2: COMM_FEE arrives
+        FormRowSet run2Records = new FormRowSet();
+        run2Records.add(enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00", "yes", "-25.00"));
+        run2Records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+        run2Records.add(enrichedBankRow("BANK-002", "Securities commission fee (AAPL)", "2026-01-20", "-25.00", "COMM_FEE"));
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(run2Records);
+
+        int run2Pairs = step.executePairing(mockDao);
+        assertEquals(1, run2Pairs);
+    }
+
+    @Test
+    public void testT9_CommFeeAmountMismatch() {
+        // T9: COMM_FEE amount mismatch → NOT paired
+        FormRowSet records = new FormRowSet();
+        records.add(enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00", "yes", "-25.00"));
+        records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+        records.add(enrichedBankRow("BANK-002", "Securities commission fee (AAPL)", "2026-01-19", "-30.00", "COMM_FEE"));
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(records);
+
+        int pairs = step.executePairing(mockDao);
+        assertEquals(0, pairs);
+    }
+
+    @Test
+    public void testT11_HasFeeNullFeeAmountPresent_FeeDetectedViaSignal2() {
+        // T11: has_fee=null (not loaded), fee_amount present → fee detected via Signal 2, paired
+        FormRowSet records = new FormRowSet();
+        FormRow secuRow = enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00");
+        // Do NOT set has_fee — simulates Joget not loading the column
+        secuRow.setProperty("fee_amount", "-25.00");
+        // Set total_amount to include fee (as persister would)
+        secuRow.setProperty("total_amount", "-50025.00");
+        records.add(secuRow);
+
+        records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+        records.add(enrichedBankRow("BANK-002", "Securities commission fee (AAPL)", "2026-01-19", "-25.00", "COMM_FEE"));
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(records);
+
+        int pairs = step.executePairing(mockDao);
+        assertEquals(1, pairs);
+
+        // Verify fee was matched
+        assertEquals("BANK-002", secuRow.getProperty("fee_trx_id"));
+    }
+
+    @Test
+    public void testT12_AllNullTotalDiffersFromOriginal_FeeDetectedViaSignal3() {
+        // T12: has_fee=null, fee_amount=null, total != original → fee detected via Signal 3
+        FormRowSet records = new FormRowSet();
+        FormRow secuRow = enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00");
+        // Do NOT set has_fee or fee_amount
+        secuRow.setProperty("total_amount", "-50025.00"); // total includes fee
+        // original_amount is already -50000.00 from the 4-param helper
+        records.add(secuRow);
+
+        records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+        records.add(enrichedBankRow("BANK-002", "Securities commission fee (AAPL)", "2026-01-19", "-25.00", "COMM_FEE"));
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(records);
+
+        int pairs = step.executePairing(mockDao);
+        assertEquals(1, pairs);
+
+        assertEquals("BANK-002", secuRow.getProperty("fee_trx_id"));
+    }
+
+    @Test
+    public void testT13_AllNullTotalEqualsOriginal_NoFee() {
+        // T13: has_fee=null, fee_amount=null, total == original → no fee, principal-only pair
+        FormRowSet records = new FormRowSet();
+        FormRow secuRow = enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00");
+        // total_amount == original_amount (both -50000.00 from 4-param helper)
+        records.add(secuRow);
+
+        records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+        records.add(enrichedBankRow("BANK-002", "Securities commission fee (AAPL)", "2026-01-19", "-25.00", "COMM_FEE"));
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(records);
+
+        int pairs = step.executePairing(mockDao);
+        assertEquals(1, pairs);
+
+        // Verify NO fee was matched (principal-only pair)
+        ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
+        verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
+        FormRow pairRow = captor.getValue().get(0);
+        assertEquals("no", pairRow.getProperty("has_fee"));
+    }
+
+    @Test
+    public void testT14_HasFeeExplicitNo_TotalDiffers_TrustsExplicitNo() {
+        // T14: has_fee="no" explicitly, total != original → trust explicit "no", principal-only pair
+        FormRowSet records = new FormRowSet();
+        FormRow secuRow = enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00");
+        secuRow.setProperty("has_fee", "no");
+        secuRow.setProperty("total_amount", "-50025.00"); // differs, but explicit no overrides
+        records.add(secuRow);
+
+        records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+        records.add(enrichedBankRow("BANK-002", "Securities commission fee (AAPL)", "2026-01-19", "-25.00", "COMM_FEE"));
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(records);
+
+        int pairs = step.executePairing(mockDao);
+        assertEquals(1, pairs);
+
+        // Verify NO fee was matched (trusts explicit "no")
+        ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
+        verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
+        FormRow pairRow = captor.getValue().get(0);
+        assertEquals("no", pairRow.getProperty("has_fee"));
+    }
+
+    @Test
+    public void testT15_FeeDetectedViaSignal3_NoCommFeeAvailable_Deferred() {
+        // T15: Fee detected via Signal 3, but no COMM_FEE available → deferred (0 pairs)
+        FormRowSet records = new FormRowSet();
+        FormRow secuRow = enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00");
+        // has_fee=null, fee_amount=null, but total differs from original
+        secuRow.setProperty("total_amount", "-50025.00");
+        records.add(secuRow);
+
+        records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+        // No COMM_FEE record
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(records);
+
+        int pairs = step.executePairing(mockDao);
+        assertEquals(0, pairs);
+
+        // No pair record should be created
+        verify(mockDao, never()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), any(FormRowSet.class));
+    }
+
+    @Test
+    public void testT10_CommFeeCurrencyMismatch() {
+        // T10: COMM_FEE currency mismatch → NOT paired
+        FormRowSet records = new FormRowSet();
+        records.add(enrichedSecuRow("SECU-001", "AST000296", "2026-01-19", "-50000.00", "yes", "-25.00"));
+        records.add(enrichedBankRow("BANK-001", "Securities buy (AAPL)", "2026-01-19", "-50000.00", "SEC_BUY"));
+
+        FormRow bankFee = enrichedBankRow("BANK-002", "Securities commission fee (AAPL)", "2026-01-19", "-25.00", "COMM_FEE");
+        bankFee.setProperty("original_currency", "EUR"); // currency mismatch vs secu USD
+        records.add(bankFee);
+
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_TRX_ENRICHMENT),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(records);
+
+        int pairs = step.executePairing(mockDao);
+        assertEquals(0, pairs);
     }
 }

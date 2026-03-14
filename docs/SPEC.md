@@ -24,14 +24,15 @@ RowsEnricher.execute()
   │     Marks re-enrichment flag on previously enriched records
   │     Filters out workspace-protected records (PAIRED/IN_REVIEW/ADJUSTED/READY/CONFIRMED/SUPERSEDED)
   │
-  ├─ 2. PIPELINE ─── DataPipeline (7 steps, sequential per transaction)
+  ├─ 2. PIPELINE ─── DataPipeline (8 steps, sequential per transaction)
   │     Step 1: CurrencyValidationStep
   │     Step 2: CounterpartyDeterminationStep
   │     Step 3: CustomerIdentificationStep      ← bank only, skips secu-related bank trx
   │     Step 4: AssetResolutionStep              ← secu only
   │     Step 5: F14RuleMappingStep
-  │     Step 6: LoanResolutionStep               ← bank only, non-blocking
-  │     Step 7: FXConversionStep                 ← non-EUR only
+  │     Step 6: BankAssetHintStep                ← bank income only (DIV_INCOME, INT_INCOME, DIV_TAX, INCOME_TAX)
+  │     Step 7: LoanResolutionStep               ← bank only, non-blocking
+  │     Step 8: FXConversionStep                 ← non-EUR only
   │
   ├─ 3. PERSIST ─── EnrichmentDataPersister
   │     Writes to trxEnrichment table
@@ -130,7 +131,23 @@ All operators respect the rule's `caseSensitive` flag.
 
 Creates NO_F14_RULES / NO_RULE_MATCH exceptions if unmatched → internal type = `UNCLASSIFIED`.
 
-### 3.6 LoanResolutionStep
+### 3.6 BankAssetHintStep
+
+**Applies to:** Bank transactions only, where `internal_type` (from F14 mapping) is one of: `DIV_INCOME`, `INT_INCOME`, `DIV_TAX`, `INCOME_TAX`. **Non-blocking** — best-effort hint, no exceptions created.
+
+Extracts a ticker symbol from parenthesized text in the payment description (e.g. `"Dividends (SBLK)"` → `SBLK`) using the shared `TickerExtractor` utility. Performs exact ticker match against `asset_master`. If found and active, stores asset data (`asset_id`, `asset_isin`, `asset_category`, `asset_class`, `asset_base_currency`, `currency_mismatch_flag`) plus `bank_asset_hint=yes` flag.
+
+**Key differences from AssetResolutionStep (Step 4):**
+- No ISIN fallback, no partial name match (too risky for free-text descriptions)
+- No auto-registration of unknown assets
+- No exception creation for unresolved assets
+- Sets `bank_asset_hint=yes` to indicate lower-confidence description-derived resolution
+
+**Shared utility:** `TickerExtractor.extractFromDescription(String)` — also used by `TransactionPairingStep` for pair audit trail. Extracts first valid alphanumeric ticker from parenthesized text, returns uppercase, rejects date-like patterns.
+
+**Persister impact:** `EnrichmentDataPersister.buildEnrichmentRow()` asset block (6 fields) was originally gated by `if (isSecu)`. Widened to `if (isSecu || bank_asset_hint == "yes")` so bank hint-resolved records also persist their asset fields. Additionally persists `bank_asset_hint` and `bank_asset_hint_ticker` flags.
+
+### 3.7 LoanResolutionStep
 
 **Applies to:** Bank transactions only. **Non-blocking** — transactions continue without loan linkage.
 
@@ -139,7 +156,7 @@ Three-tier resolution:
 2. Match by `other_side_account` → `loanContract`
 3. Auto-register DRAFT loan if contract number extracted but not found
 
-### 3.7 FXConversionStep
+### 3.8 FXConversionStep
 
 **Applies to:** Non-EUR transactions only (EUR = base currency, skipped).
 
@@ -183,12 +200,23 @@ Each enriched record stores: source type, statement ID, transaction ID, counterp
 
 ## 6. Cross-Statement Pairing
 
-Post-persistence step. Matches securities and bank transactions:
+Post-persistence step. Two-phase algorithm matching securities and bank transactions.
 
-- **Candidates:** ENRICHED records with no `pair_id`
-- **Match logic:** `secu.original_amount = bank.principal_amount + bank.fee_amount`, date within ±1 day
-- **Bank classification:** Uses `internal_type` (SEC_BUY, SEC_SELL, COMM_FEE)
-- **Result:** Creates `trx_pair` record, updates both sides to PAIRED status
+**Candidates:** ENRICHED records with no `pair_id`.
+
+### Phase 1 — Principal Matching
+
+Builds an index of unpaired bank principal records (SEC_BUY, SEC_SELL) by transaction date. Matches `secu.original_amount` against `bank.original_amount` within ±1 day of settlement date. Same sign, same currency required. Exactly one match required (ambiguous matches are skipped).
+
+### Phase 2 — Fee Resolution
+
+After principal match, checks if `secu.has_fee = "yes"`. If yes, searches for a COMM_FEE bank record matching `|secu.fee_amount|` within ±2 days of the principal date. Disambiguates by ticker when multiple candidates exist (via `TickerExtractor`).
+
+**Full pairing requirement:** A secu record with `has_fee=yes` is ONLY paired when both principal AND fee bank transactions are found. If the fee is missing, pairing is deferred until the next enrichment run when the fee statement arrives.
+
+### Result
+
+Creates `trx_pair` record linking secu + bank principal + bank fee (if applicable). Updates all linked records to PAIRED status. Sets `fee_trx_id` on the secu record when a fee is matched.
 
 ---
 
@@ -297,12 +325,15 @@ src/main/java/com/fiscaladmin/gam/
     │   └── TransactionDataLoader.java    # Data loading + state management
     ├── persister/
     │   └── EnrichmentDataPersister.java  # Persistence + JTA fix
+    ├── util/
+    │   └── TickerExtractor.java          # Shared ticker extraction from descriptions
     └── steps/                            # Pipeline step implementations
         ├── CurrencyValidationStep.java
         ├── CounterpartyDeterminationStep.java
         ├── CustomerIdentificationStep.java
         ├── AssetResolutionStep.java
         ├── F14RuleMappingStep.java
+        ├── BankAssetHintStep.java
         ├── LoanResolutionStep.java
         ├── FXConversionStep.java
         └── TransactionPairingStep.java
@@ -472,6 +503,13 @@ FROM app_fd_bank_statement s
 LEFT JOIN app_fd_bank_total_trx t ON t.c_statementId = s.id
 GROUP BY s.id, s.c_status;
 ```
+
+**Joget form-to-database rules:**
+- All database columns are managed through Joget Form Builder — never create columns directly in MySQL
+- Table names: form ID with `app_fd_` prefix (e.g. form `trxEnrichment` → table `app_fd_trxEnrichment`)
+- Column names: field ID with `c_` prefix (e.g. field `bank_asset_hint` → column `c_bank_asset_hint`)
+- When adding new fields to the persister, the form field MUST exist first — otherwise `saveOrUpdate()` fails for rows with non-null values
+- `setPropertySafe(row, "field", value)` skips null values — missing columns only cause errors when value is non-null
 
 **Common issues:**
 - Table names must include `app_fd_` prefix (e.g. `app_fd_customer`)

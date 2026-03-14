@@ -46,10 +46,11 @@ The processing pipeline consists of:
 4. **Customer Identification** — Identifies customers from `customer` table (bank only, 6 methods)
 5. **Asset Resolution** — Resolves securities from `asset_master` (secu only)
 6. **F14 Rule Mapping** — Classifies transactions using rules from `cp_txn_mapping`
-7. **Loan Resolution** — Links to loan contracts from `loanContract` (bank only, non-blocking)
-8. **FX Conversion** — Converts non-EUR to EUR using `fx_rates_eur`
-9. **Data Persistence** — Saves to `trxEnrichment` table (REQUIRES_NEW per statement)
-10. **Transaction Pairing** — Matches secu ↔ bank post-persistence
+7. **Bank Asset Hint** — Extracts ticker from bank income descriptions, resolves against `asset_master` (non-blocking, best-effort)
+8. **Loan Resolution** — Links to loan contracts from `loanContract` (bank only, non-blocking)
+9. **FX Conversion** — Converts non-EUR to EUR using `fx_rates_eur`
+10. **Data Persistence** — Saves to `trxEnrichment` table (REQUIRES_NEW per statement)
+11. **Transaction Pairing** — Two-phase matching: principal amount match, then fee resolution (secu ↔ bank post-persistence)
 
 ### Framework Components
 
@@ -59,7 +60,20 @@ The reusable framework in `com.fiscaladmin.gam.enrichrows.framework` provides:
 - **DataContext** - Data container passed between steps
 - **StepResult/PipelineResult** - Result objects for tracking processing status
 
+### Joget Form-to-Database Mapping
+
+**All database columns are managed through Joget Form Builder — NEVER create columns directly in the database.**
+
+- Each Joget form corresponds to a MySQL table with `app_fd_` prefix (e.g. form `trxEnrichment` → table `app_fd_trxEnrichment`)
+- Form field IDs map to database columns with `c_` prefix (e.g. field `bank_asset_hint` → column `c_bank_asset_hint`)
+- `FormDataDao.saveOrUpdate()` uses form-level field names; Joget handles the `c_` prefix automatically
+- `setPropertySafe(row, "field_name", value)` skips null values — only sets the property when value is NOT null. This means a missing column only causes SQL errors for transactions where the value is non-null.
+
+**Critical rule:** When adding new `setPropertySafe()` calls in the persister, the corresponding form field MUST exist in the Joget form definition FIRST. If a non-null value is written to a field that doesn't exist as a form column, the entire `saveOrUpdate()` call fails silently.
+
 ### Key Database Tables
+
+Table names below are Joget form IDs. In MySQL they have `app_fd_` prefix, and columns have `c_` prefix.
 
 **Source Data:**
 - `bank_statement`, `bank_total_trx`, `secu_total_trx` - Transaction sources
@@ -77,7 +91,7 @@ The reusable framework in `com.fiscaladmin.gam.enrichrows.framework` provides:
 - `broker` - Broker registry
 
 **Processing:**
-- `trx_enrichment` - Enriched transaction output
+- `trxEnrichment` - Enriched transaction output
 - `exception_queue` - Exceptions requiring manual review
 - `audit_log` - Processing audit trail
 
@@ -93,6 +107,7 @@ To add a new step:
 1. Create a class extending `AbstractDataStep` in `com.fiscaladmin.gam.enrichrows.steps`
 2. Implement `performStep()` and `getStepName()`
 3. Add to pipeline in `RowsEnricher` using `.addStep(new YourStep())`
+4. If the step persists new fields: create the form fields in Joget Form Builder FIRST, then add `setPropertySafe()` calls in `EnrichmentDataPersister`
 
 ### Common Development Tasks
 
@@ -122,7 +137,7 @@ SELECT COUNT(*) FROM secu_total_trx WHERE c_status = 'new';
 SELECT * FROM app_fd_cp_txn_mapping WHERE c_status = 'active';
 
 -- Check enrichment results
-SELECT * FROM app_fd_trx_enrichment ORDER BY dateCreated DESC LIMIT 10;
+SELECT * FROM app_fd_trxEnrichment ORDER BY dateCreated DESC LIMIT 10;
 ```
 
 ### Constants and Configuration

@@ -181,8 +181,9 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
         setPropertySafe(row, "customer_code", data.get("customer_code"));                   // 24
         setPropertySafe(row, "customer_display_name", data.get("customer_name"));           // 25
 
-        // ===== ASSET (6 fields, secu only) =====
-        if (isSecu) {
+        // ===== ASSET (6 fields, secu + bank asset hint) =====
+        boolean hasAsset = isSecu || "yes".equals(getStringValue(data.get("bank_asset_hint")));
+        if (hasAsset) {
             setPropertySafe(row, "resolved_asset_id", data.get("asset_id"));                // 26
             setPropertySafe(row, "asset_isin", data.get("asset_isin"));                     // 27
             setPropertySafe(row, "asset_category", data.get("asset_category"));             // 28
@@ -192,6 +193,10 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
             setPropertySafe(row, "currency_mismatch_flag",
                     "true".equals(mismatch) || "yes".equals(mismatch) ? "yes" : "no");
         }
+
+        // ===== BANK ASSET HINT FLAGS (2 fields) =====
+        setPropertySafe(row, "bank_asset_hint", data.get("bank_asset_hint"));
+        setPropertySafe(row, "bank_asset_hint_ticker", data.get("bank_asset_hint_ticker"));
 
         // ===== COUNTERPARTY (7 fields) =====
         routeCounterparty(row, data);                                                       // 32-37

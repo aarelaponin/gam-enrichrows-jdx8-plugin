@@ -97,6 +97,7 @@ public class RowsEnricher extends DefaultApplicationPlugin {
                 .addStep(new CustomerIdentificationStep())
                 .addStep(new AssetResolutionStep())
                 .addStep(new F14RuleMappingStep())
+                .addStep(new BankAssetHintStep())
                 .addStep(new LoanResolutionStep())
                 .addStep(new FXConversionStep())
                 .setStopOnError(stopOnError)

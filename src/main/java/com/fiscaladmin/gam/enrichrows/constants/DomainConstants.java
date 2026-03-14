@@ -63,8 +63,9 @@ public final class DomainConstants {
     public static final String PROCESSING_STATUS_COUNTERPARTY_DETERMINED = "counterparty_determined";
     public static final String PROCESSING_STATUS_CURRENCY_VALIDATED = "currency_validated";
     public static final String PROCESSING_STATUS_ASSET_RESOLVED = "asset_resolved";
+    public static final String PROCESSING_STATUS_BANK_ASSET_HINT = "bank_asset_hint_resolved";
 
-    
+
     // =====================================================
     // Domain-Specific Field Names
     // =====================================================
@@ -131,6 +132,7 @@ public final class DomainConstants {
     public static final String AUDIT_COUNTERPARTY_DETERMINED = "COUNTERPARTY_DETERMINED";
     public static final String AUDIT_ASSET_RESOLVED = "ASSET_RESOLVED";
     public static final String AUDIT_ASSET_AUTO_REGISTERED = "ASSET_AUTO_REGISTERED";
+    public static final String AUDIT_BANK_ASSET_HINT_RESOLVED = "BANK_ASSET_HINT_RESOLVED";
 
     // Private constructor to prevent instantiation
     private DomainConstants() {
