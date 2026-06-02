@@ -310,6 +310,127 @@ public class F14RuleMappingStepTest {
     }
 
     // =========================================================================
+    // Case-sensitivity tests
+    // =========================================================================
+
+    @Test
+    public void testCaseSensitiveTrue_exactCaseMatches() {
+        FormRow rule = TestDataFactory.f14RuleRow("R1", "CPT0143", "bank",
+                "payment_description", "contains", "Wire",
+                "WIRE_TRANSFER", 1);
+        rule.setProperty("caseSensitive", "true");
+
+        FormRowSet rules = TestDataFactory.rowSet(rule);
+        when(mockDao.find(isNull(), eq("cp_txn_mapping"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(rules);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        TestDataFactory.withCounterparty(ctx, "CPT0143", "Bank");
+        ctx.setPaymentDescription("Wire transfer payment");
+
+        StepResult result = step.execute(ctx, mockDao);
+
+        assertTrue(result.isSuccess());
+        assertEquals("WIRE_TRANSFER", ctx.getAdditionalDataValue("internal_type"));
+    }
+
+    @Test
+    public void testCaseSensitiveTrue_wrongCaseNoMatch() {
+        FormRow rule = TestDataFactory.f14RuleRow("R1", "CPT0143", "bank",
+                "payment_description", "contains", "Wire",
+                "WIRE_TRANSFER", 1);
+        rule.setProperty("caseSensitive", "true");
+
+        FormRowSet rules = TestDataFactory.rowSet(rule);
+        when(mockDao.find(isNull(), eq("cp_txn_mapping"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(rules);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        TestDataFactory.withCounterparty(ctx, "CPT0143", "Bank");
+        ctx.setPaymentDescription("wire transfer payment"); // lowercase 'w'
+
+        StepResult result = step.execute(ctx, mockDao);
+
+        assertTrue(result.isSuccess());
+        assertEquals(FrameworkConstants.INTERNAL_TYPE_UNMATCHED,
+                ctx.getAdditionalDataValue("internal_type"));
+    }
+
+    @Test
+    public void testCaseInsensitiveDefault_matchesRegardlessOfCase() {
+        // No caseSensitive property → default is case-insensitive
+        FormRowSet rules = TestDataFactory.rowSet(
+                TestDataFactory.f14RuleRow("R1", "CPT0143", "bank",
+                        "payment_description", "contains", "Wire",
+                        "WIRE_TRANSFER", 1)
+        );
+        when(mockDao.find(isNull(), eq("cp_txn_mapping"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(rules);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        TestDataFactory.withCounterparty(ctx, "CPT0143", "Bank");
+        ctx.setPaymentDescription("wire transfer payment"); // lowercase
+
+        StepResult result = step.execute(ctx, mockDao);
+
+        assertTrue(result.isSuccess());
+        assertEquals("WIRE_TRANSFER", ctx.getAdditionalDataValue("internal_type"));
+    }
+
+    // =========================================================================
+    // Regex operator tests
+    // =========================================================================
+
+    @Test
+    public void testRegexOperator_matches() {
+        // Regex rules should use caseSensitive=true to avoid toUpperCase()
+        // corrupting regex character classes like \d → \D
+        FormRow rule = TestDataFactory.f14RuleRow("R1", "CPT0143", "bank",
+                "payment_description", "regex", "INTRESS.*\\d{1,2}Q\\d{2}",
+                "INT_INCOME", 1);
+        rule.setProperty("caseSensitive", "true");
+
+        FormRowSet rules = TestDataFactory.rowSet(rule);
+        when(mockDao.find(isNull(), eq("cp_txn_mapping"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(rules);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        TestDataFactory.withCounterparty(ctx, "CPT0143", "Bank");
+        ctx.setPaymentDescription("INTRESSID 2Q24 payment");
+
+        StepResult result = step.execute(ctx, mockDao);
+
+        assertTrue(result.isSuccess());
+        assertEquals("INT_INCOME", ctx.getAdditionalDataValue("internal_type"));
+    }
+
+    @Test
+    public void testRegexOperator_noMatch() {
+        FormRowSet rules = TestDataFactory.rowSet(
+                TestDataFactory.f14RuleRow("R1", "CPT0143", "bank",
+                        "payment_description", "regex", "^INTRESS\\d+$",
+                        "INT_INCOME", 1)
+        );
+        when(mockDao.find(isNull(), eq("cp_txn_mapping"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(rules);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        TestDataFactory.withCounterparty(ctx, "CPT0143", "Bank");
+        ctx.setPaymentDescription("Wire transfer payment");
+
+        StepResult result = step.execute(ctx, mockDao);
+
+        assertTrue(result.isSuccess());
+        assertEquals(FrameworkConstants.INTERNAL_TYPE_UNMATCHED,
+                ctx.getAdditionalDataValue("internal_type"));
+    }
+
+    // =========================================================================
     // §9b Idempotency guard tests
     // =========================================================================
 

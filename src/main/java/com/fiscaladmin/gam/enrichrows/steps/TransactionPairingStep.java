@@ -259,8 +259,10 @@ public class TransactionPairingStep {
         // Cross-verify source references
         boolean refsOverlap = verifySourceReferences(secuRecord, match.principal);
 
-        // Create the pair — always AUTO_ACCEPTED for exact amount match
-        String pairId = UUID.randomUUID().toString();
+        // Create the pair — always AUTO_ACCEPTED for exact amount match.
+        // Deterministic id (one pair per securities trade) so a re-run REPLACES
+        // the same row instead of accumulating a duplicate.
+        String pairId = "PAIR-" + secuRecord.getId();
         String timestamp = DATE_FORMAT.format(new Date());
         String ticker = extractTickerFromDescription(match.principal.getProperty("description"));
 
@@ -457,7 +459,8 @@ public class TransactionPairingStep {
      */
     private boolean shouldSkipBankRecord(FormRow bankRecord) {
         String type = bankRecord.getProperty("internal_type");
-        return "DIV_INCOME".equals(type) || "INCOME_TAX".equals(type);
+        return DomainConstants.INTERNAL_TYPE_DIV_INCOME.equals(type)
+                || DomainConstants.INTERNAL_TYPE_INCOME_TAX.equals(type);
     }
 
     private boolean isBankPrincipal(FormRow bankRecord) {
@@ -509,35 +512,104 @@ public class TransactionPairingStep {
                                    int dateOffset, boolean refsOverlap,
                                    String pairStatus, String timestamp) {
         try {
+            // POSTED-IMMUTABLE GUARD: never replace a pair whose trade has already
+            // been posted to the GL. Idempotency is fine for un-posted pairs, but a
+            // posted pair is an accounting fact and must not change underneath the
+            // ledger. The deterministic id means re-runs target the SAME row; if that
+            // row is flagged POSTED we leave it untouched.
+            FormRow existing = formDataDao.load(null, DomainConstants.TABLE_TRX_PAIR, pairId);
+            if (existing != null && "POSTED".equalsIgnoreCase(existing.getProperty("pair_status"))) {
+                LogUtil.info(CLASS_NAME, "Pair " + pairId + " is POSTED — left unchanged (immutable).");
+                return;
+            }
+
+            // Compute the canonical pairing facts (ported from gl-preparator so
+            // rows-enrichment is now the single, complete pairing owner).
+            double secuAmount   = parseAmount(secuRecord.getProperty("original_amount"));
+            double bankMain     = parseAmount(principalRecord.getProperty("original_amount"));
+            double bankFee      = feeRecord != null ? parseAmount(feeRecord.getProperty("original_amount")) : 0.0;
+            double totalBank    = bankMain + bankFee;
+            double variance     = Math.abs(secuAmount) - Math.abs(totalBank);
+            double variancePct  = Math.abs(secuAmount) > 0.01
+                    ? Math.abs(variance) / Math.abs(secuAmount) * 100.0 : 0.0;
+            int settlementDays  = Math.abs(dateOffset);
+            String tradeType    = determineTradeType(secuRecord, secuAmount);
+            String pairType     = determinePairType(tradeType);
+            double confidence   = calculateConfidence(variancePct, settlementDays, false);
+
             FormRow pairRow = new FormRow();
             pairRow.setId(pairId);
-
-            pairRow.setProperty("secu_enrichment_id", secuRecord.getId());
-            pairRow.setProperty("bank_principal_enrichment_id", principalRecord.getId());
-            pairRow.setProperty("bank_fee_enrichment_id",
-                    feeRecord != null ? feeRecord.getId() : "");
-            pairRow.setProperty("ticker",
-                    ticker != null ? ticker : "");
-            pairRow.setProperty("pair_date_match", secuSettleDate);
-            pairRow.setProperty("secu_settle_date", secuSettleDate);
-            pairRow.setProperty("bank_pay_date", bankPayDate != null ? bankPayDate : "");
-            pairRow.setProperty("date_offset", String.valueOf(dateOffset));
-            pairRow.setProperty("secu_amount", secuRecord.getProperty("original_amount"));
-            pairRow.setProperty("bank_amount", principalRecord.getProperty("original_amount"));
-            pairRow.setProperty("currency", secuRecord.getProperty("original_currency"));
-            pairRow.setProperty("has_fee", feeRecord != null ? "yes" : "no");
-            pairRow.setProperty("fee_amount", feeRecord != null ? feeRecord.getProperty("original_amount") : "");
-            pairRow.setProperty("references_overlap", refsOverlap ? "yes" : "no");
-            pairRow.setProperty("pair_date", timestamp);
-            pairRow.setProperty("status", pairStatus);
+            // Canonical field ids — MUST match the trx_pair form (F02.21). Writing
+            // names the form doesn't define would silently produce a blank row.
+            pairRow.setProperty("pair_id", pairId);
+            pairRow.setProperty("pair_type", pairType);
+            pairRow.setProperty("pair_status", pairStatus != null ? pairStatus : "COMPLETE");
+            pairRow.setProperty("statement_id", nz(secuRecord.getProperty("statement_id")));
+            pairRow.setProperty("secu_trx_id", secuRecord.getId());
+            pairRow.setProperty("bank_main_trx_id", principalRecord.getId());
+            pairRow.setProperty("bank_fee_trx_id", feeRecord != null ? feeRecord.getId() : "");
+            pairRow.setProperty("trade_date", nz(secuRecord.getProperty("transaction_date")));
+            pairRow.setProperty("settlement_date", nz(secuSettleDate));
+            pairRow.setProperty("settlement_days", String.valueOf(settlementDays));
+            pairRow.setProperty("secu_amount", fmt(secuAmount));
+            pairRow.setProperty("bank_main_amount", fmt(bankMain));
+            pairRow.setProperty("bank_fee_amount", fmt(bankFee));
+            pairRow.setProperty("total_bank_amount", fmt(totalBank));
+            pairRow.setProperty("amount_variance", fmt(variance));
+            pairRow.setProperty("variance_percentage", fmt(variancePct));
+            pairRow.setProperty("matching_confidence", fmt(confidence));
+            pairRow.setProperty("created_by_step", "rows-enrichment");
+            pairRow.setProperty("matching_rules_applied",
+                    "[Amount tolerance match; settlement window " + settlementDays
+                    + "d; source-ref overlap=" + (refsOverlap ? "yes" : "no") + "]");
+            pairRow.setProperty("review_notes", "");
 
             FormRowSet rowSet = new FormRowSet();
             rowSet.add(pairRow);
+            // saveOrUpdate keyed by the deterministic id → upsert, never accumulate.
             formDataDao.saveOrUpdate(null, DomainConstants.TABLE_TRX_PAIR, rowSet);
 
         } catch (Exception e) {
             LogUtil.error(CLASS_NAME, e, "Error creating pair record: " + pairId);
         }
+    }
+
+    // ---- pairing-fact helpers (ported from gl-preparator) ----
+
+    private static String nz(String s) { return s == null ? "" : s; }
+
+    private static String fmt(double d) {
+        return java.math.BigDecimal.valueOf(d)
+                .setScale(2, java.math.RoundingMode.HALF_UP).toPlainString();
+    }
+
+    /** BUY/SELL from explicit type, else internal_type, else amount sign (negative = buy/outflow). */
+    private String determineTradeType(FormRow secuRow, double amount) {
+        String t = secuRow.getProperty("internal_type");
+        if (t != null) {
+            String u = t.toUpperCase();
+            if (u.contains("BUY") || u.contains("PURCHASE")) return "BUY";
+            if (u.contains("SELL")) return "SELL";
+        }
+        return amount < 0 ? "BUY" : "SELL";
+    }
+
+    private String determinePairType(String tradeType) {
+        if ("BUY".equals(tradeType)) return "BUY_SETTLE";
+        if ("SELL".equals(tradeType)) return "SELL_SETTLE";
+        return "UNKNOWN";
+    }
+
+    /** Confidence: penalise amount variance and settlement gap; clamp 0..100. */
+    private double calculateConfidence(double amountDiffPercentage, long settlementDays, boolean isFee) {
+        double confidence = 100.0;
+        if (isFee) {
+            confidence -= settlementDays * 10;
+        } else {
+            confidence -= amountDiffPercentage * 2;
+            confidence -= settlementDays * 5;
+        }
+        return Math.max(0, Math.min(100, confidence));
     }
 
     /**

@@ -14,6 +14,7 @@ import org.joget.apps.form.model.FormRowSet;
 import org.joget.commons.util.LogUtil;
 import org.joget.plugin.base.DefaultApplicationPlugin;
 
+import java.io.InputStream;
 import java.util.*;
 
 /**
@@ -23,6 +24,24 @@ public class RowsEnricher extends DefaultApplicationPlugin {
 
     private static final String CLASS_NAME = RowsEnricher.class.getName();
 
+    // Stamped automatically from Maven (${maven.build.timestamp}) at build time.
+    private static final String BUILD = loadBuild();
+
+    private static String loadBuild() {
+        try (InputStream in = RowsEnricher.class.getResourceAsStream("/build-info.properties")) {
+            if (in != null) {
+                Properties p = new Properties();
+                p.load(in);
+                String b = p.getProperty("build");
+                if (b != null && !b.isEmpty() && !b.startsWith("${")) {
+                    return b;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return "dev";
+    }
+
     @Override
     public String getName() {
         return "Rows Enrichment";
@@ -30,17 +49,18 @@ public class RowsEnricher extends DefaultApplicationPlugin {
 
     @Override
     public String getDescription() {
-        return "This plugin will enrich statement rows";
+        return "This plugin will enrich statement rows. Build " + BUILD
+                + " — pairing is idempotent (clears prior trx_pair rows per securities record).";
     }
 
     @Override
     public String getVersion() {
-        return "8.1-SNAPSHOT";
+        return "8.1-SNAPSHOT build " + BUILD;
     }
 
     @Override
     public String getLabel() {
-        return "Rows Enrichment";
+        return "Rows Enrichment (build " + BUILD + ")";
     }
 
     @Override

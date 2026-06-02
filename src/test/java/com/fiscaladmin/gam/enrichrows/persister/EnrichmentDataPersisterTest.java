@@ -331,10 +331,10 @@ public class EnrichmentDataPersisterTest {
         String desc = persister.buildDescription(ctx, config);
 
         // Default bank fields: payment_description,reference_number,other_side_name,other_side_bic,other_side_account
-        assertTrue(desc.contains("payment_description: Wire transfer"));
-        assertTrue(desc.contains("reference_number: REF-12345"));
-        assertTrue(desc.contains("other_side_name: Deutsche Bank AG"));
-        assertTrue(desc.contains("other_side_bic: DEUTDEFF"));
+        assertTrue(desc.contains("Wire transfer"));
+        assertTrue(desc.contains("REF-12345"));
+        assertTrue(desc.contains("Deutsche Bank AG"));
+        assertTrue(desc.contains("DEUTDEFF"));
         // Fields separated by " | "
         assertTrue(desc.contains(" | "));
     }
@@ -347,11 +347,11 @@ public class EnrichmentDataPersisterTest {
         String desc = persister.buildDescription(ctx, config);
 
         // Default secu fields: description,reference,ticker,quantity,price
-        assertTrue(desc.contains("description: Apple Inc. Common Stock"));
-        assertTrue(desc.contains("reference: SEC-REF-001"));
-        assertTrue(desc.contains("ticker: AAPL"));
-        assertTrue(desc.contains("quantity: 100"));
-        assertTrue(desc.contains("price: 500.00"));
+        assertTrue(desc.contains("Apple Inc. Common Stock"));
+        assertTrue(desc.contains("SEC-REF-001"));
+        assertTrue(desc.contains("AAPL"));
+        assertTrue(desc.contains("100"));
+        assertTrue(desc.contains("500.00"));
     }
 
     @Test
@@ -362,8 +362,8 @@ public class EnrichmentDataPersisterTest {
 
         String desc = persister.buildDescription(ctx, config);
 
-        assertTrue(desc.contains("payment_description: Wire transfer"));
-        assertTrue(desc.contains("reference_number: REF-12345"));
+        assertTrue(desc.contains("Wire transfer"));
+        assertTrue(desc.contains("REF-12345"));
         // Should NOT contain fields not in custom list
         assertFalse(desc.contains("other_side_name"));
     }
@@ -377,8 +377,8 @@ public class EnrichmentDataPersisterTest {
 
         String desc = persister.buildDescription(ctx, config);
 
-        assertTrue(desc.contains("payment_description: Wire transfer"));
-        assertTrue(desc.contains("reference_number: REF-12345"));
+        assertTrue(desc.contains("Wire transfer"));
+        assertTrue(desc.contains("REF-12345"));
         assertFalse(desc.contains("nonexistent_field"));
     }
 
@@ -400,7 +400,9 @@ public class EnrichmentDataPersisterTest {
 
         String desc = persister.buildDescription(ctx, new HashMap<>());
 
-        assertEquals("", desc);
+        // Description is now built from the context getters, so it survives even
+        // when the raw transaction row is not attached during persistence.
+        assertTrue(desc.contains("Wire transfer"));
     }
 
     // ===== Settlement Date =====
@@ -978,10 +980,10 @@ public class EnrichmentDataPersisterTest {
 
         String desc = persister.buildDescription(ctx, config);
 
-        // First field "payment_description: Wire transfer" (35 chars) exceeds 10
+        // First field value "Wire transfer" (13 chars) exceeds 10
         // Should truncate the first field as last resort
         assertEquals(10, desc.length());
-        assertTrue(desc.startsWith("payment_de")); // truncated at 10
+        assertTrue(desc.startsWith("Wire trans")); // truncated at 10
     }
 
     // ===== §2.4 Secu Manual Review: source-type-aware determineManualReviewStatus =====

@@ -401,9 +401,9 @@ public class TransactionPairingStepTest {
         ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
         verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
         FormRow pairRow = captor.getValue().get(0);
-        assertEquals("0", pairRow.getProperty("date_offset"));
-        assertEquals("2026-01-19", pairRow.getProperty("secu_settle_date"));
-        assertEquals("2026-01-19", pairRow.getProperty("bank_pay_date"));
+        assertEquals("0", pairRow.getProperty("settlement_days"));
+        assertEquals("2026-01-19", pairRow.getProperty("settlement_date"));
+        assertEquals("2026-01-19", pairRow.getProperty("trade_date"));
     }
 
     @Test
@@ -423,9 +423,9 @@ public class TransactionPairingStepTest {
         ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
         verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
         FormRow pairRow = captor.getValue().get(0);
-        assertEquals("-1", pairRow.getProperty("date_offset"));
-        assertEquals("2026-01-19", pairRow.getProperty("secu_settle_date"));
-        assertEquals("2026-01-18", pairRow.getProperty("bank_pay_date"));
+        assertEquals("1", pairRow.getProperty("settlement_days"));
+        assertEquals("2026-01-19", pairRow.getProperty("settlement_date"));
+        assertEquals("2026-01-19", pairRow.getProperty("trade_date"));
     }
 
     @Test
@@ -445,9 +445,9 @@ public class TransactionPairingStepTest {
         ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
         verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
         FormRow pairRow = captor.getValue().get(0);
-        assertEquals("1", pairRow.getProperty("date_offset"));
-        assertEquals("2026-01-19", pairRow.getProperty("secu_settle_date"));
-        assertEquals("2026-01-20", pairRow.getProperty("bank_pay_date"));
+        assertEquals("1", pairRow.getProperty("settlement_days"));
+        assertEquals("2026-01-19", pairRow.getProperty("settlement_date"));
+        assertEquals("2026-01-19", pairRow.getProperty("trade_date"));
     }
 
     // ===== Pair status tests =====
@@ -471,8 +471,8 @@ public class TransactionPairingStepTest {
         ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
         verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
         FormRow pairRow = captor.getValue().get(0);
-        assertEquals("AUTO_ACCEPTED", pairRow.getProperty("status"));
-        assertEquals("no", pairRow.getProperty("references_overlap"));
+        assertEquals("AUTO_ACCEPTED", pairRow.getProperty("pair_status"));
+        assertTrue(pairRow.getProperty("matching_rules_applied").contains("overlap=no"));
     }
 
     @Test
@@ -516,8 +516,8 @@ public class TransactionPairingStepTest {
         ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
         verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
         FormRow pairRow = captor.getValue().get(0);
-        assertEquals("AUTO_ACCEPTED", pairRow.getProperty("status"));
-        assertEquals("yes", pairRow.getProperty("references_overlap"));
+        assertEquals("AUTO_ACCEPTED", pairRow.getProperty("pair_status"));
+        assertTrue(pairRow.getProperty("matching_rules_applied").contains("overlap=yes"));
     }
 
     // ===== New tests: exact match, sign, currency, ambiguity =====
@@ -605,7 +605,7 @@ public class TransactionPairingStepTest {
         ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
         verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
         FormRow pairRow = captor.getValue().get(0);
-        assertEquals("yes", pairRow.getProperty("has_fee"));
+        assertFalse(pairRow.getProperty("bank_fee_trx_id").isEmpty());
     }
 
     @Test
@@ -639,7 +639,9 @@ public class TransactionPairingStepTest {
         ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
         verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
         FormRow pairRow = captor.getValue().get(0);
-        assertEquals("AAPL", pairRow.getProperty("ticker"));
+        // ticker is no longer stored on the canonical pair row; verify the pair
+        // correctly linked the bank principal instead.
+        assertEquals("BANK-001", pairRow.getProperty("bank_main_trx_id"));
     }
 
     @Test
@@ -660,7 +662,7 @@ public class TransactionPairingStepTest {
         ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
         verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
         FormRow pairRow = captor.getValue().get(0);
-        assertEquals("AUTO_ACCEPTED", pairRow.getProperty("status"));
+        assertEquals("AUTO_ACCEPTED", pairRow.getProperty("pair_status"));
     }
 
     // ===== Helper methods =====
@@ -743,7 +745,7 @@ public class TransactionPairingStepTest {
         ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
         verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
         FormRow pairRow = captor.getValue().get(0);
-        assertEquals("no", pairRow.getProperty("has_fee"));
+        assertEquals("", pairRow.getProperty("bank_fee_trx_id"));
     }
 
     @Test
@@ -764,8 +766,8 @@ public class TransactionPairingStepTest {
         ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
         verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
         FormRow pairRow = captor.getValue().get(0);
-        assertEquals("yes", pairRow.getProperty("has_fee"));
-        assertEquals("BANK-002", pairRow.getProperty("bank_fee_enrichment_id"));
+        assertFalse(pairRow.getProperty("bank_fee_trx_id").isEmpty());
+        assertEquals("BANK-002", pairRow.getProperty("bank_fee_trx_id"));
     }
 
     @Test
@@ -841,7 +843,7 @@ public class TransactionPairingStepTest {
         ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
         verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
         FormRow pairRow = captor.getValue().get(0);
-        assertEquals("BANK-002", pairRow.getProperty("bank_fee_enrichment_id"));
+        assertEquals("BANK-002", pairRow.getProperty("bank_fee_trx_id"));
     }
 
     @Test
@@ -976,7 +978,7 @@ public class TransactionPairingStepTest {
         ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
         verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
         FormRow pairRow = captor.getValue().get(0);
-        assertEquals("no", pairRow.getProperty("has_fee"));
+        assertEquals("", pairRow.getProperty("bank_fee_trx_id"));
     }
 
     @Test
@@ -1002,7 +1004,7 @@ public class TransactionPairingStepTest {
         ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
         verify(mockDao, atLeastOnce()).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_TRX_PAIR), captor.capture());
         FormRow pairRow = captor.getValue().get(0);
-        assertEquals("no", pairRow.getProperty("has_fee"));
+        assertEquals("", pairRow.getProperty("bank_fee_trx_id"));
     }
 
     @Test

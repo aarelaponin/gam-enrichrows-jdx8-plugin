@@ -256,7 +256,9 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
 
     /**
      * Build description from configurable field lists per source type.
-     * Format: "field_label: value | field_label: value | ..."
+     * Format: "value | value | ..." — the raw source values joined by " | ".
+     * The source field NAME is intentionally NOT prepended: a prefix like
+     * "payment_description: " only clutters the column and hides the real text.
      */
     String buildDescription(DataContext context, Map<String, Object> config) {
         String fieldList;
@@ -269,16 +271,14 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
         }
 
         int maxLength = getConfigInt(config, "descriptionMaxLength", 2000);
-        FormRow trxRow = context.getTransactionRow();
-        if (trxRow == null) return "";
 
         StringBuilder sb = new StringBuilder();
         String[] fields = fieldList.split(",");
         for (String field : fields) {
             field = field.trim();
-            String value = trxRow.getProperty(field);
+            String value = descriptionFieldValue(context, field);
             if (value != null && !value.isEmpty()) {
-                String segment = field + ": " + value;
+                String segment = value;
                 String separator = sb.length() > 0 ? " | " : "";
                 if (sb.length() + separator.length() + segment.length() > maxLength) {
                     if (sb.length() == 0) {
@@ -292,6 +292,33 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
         }
 
         return sb.toString();
+    }
+
+    /**
+     * Resolve a description source field. Reads the DataContext getters first —
+     * these are populated during enrichment and are reliably present in the
+     * persist phase — and falls back to the raw transaction row. The raw row is
+     * NOT always attached during persistence, which previously yielded empty
+     * descriptions even though the source values were available on the context.
+     */
+    private String descriptionFieldValue(DataContext c, String field) {
+        String v;
+        switch (field) {
+            case "payment_description": v = c.getPaymentDescription(); break;
+            case "reference_number":    v = c.getReferenceNumber();    break;
+            case "other_side_name":     v = c.getOtherSideName();      break;
+            case "other_side_bic":      v = c.getOtherSideBic();       break;
+            case "other_side_account":  v = c.getOtherSideAccount();   break;
+            case "description":         v = c.getDescription();        break;
+            case "reference":           v = c.getReference();          break;
+            case "ticker":              v = c.getTicker();             break;
+            case "quantity":            v = c.getQuantity();           break;
+            case "price":               v = c.getPrice();              break;
+            default:                    v = null;
+        }
+        if (v != null && !v.isEmpty()) return v;
+        FormRow r = c.getTransactionRow();
+        return r != null ? r.getProperty(field) : null;
     }
 
     /**
@@ -474,7 +501,13 @@ public class EnrichmentDataPersister extends AbstractDataPersister<DataContext> 
     private String getConfigString(Map<String, Object> config, String key, String defaultValue) {
         if (config != null && config.containsKey(key)) {
             Object val = config.get(key);
-            return val != null ? val.toString() : defaultValue;
+            // Fall back to the default when the config value is null OR blank. The
+            // enrichment process passes unset properties as empty strings, so a
+            // blank "bankDescriptionFields"/"secuDescriptionFields" would otherwise
+            // make the field list empty and produce an empty description.
+            if (val != null && !val.toString().trim().isEmpty()) {
+                return val.toString();
+            }
         }
         return defaultValue;
     }

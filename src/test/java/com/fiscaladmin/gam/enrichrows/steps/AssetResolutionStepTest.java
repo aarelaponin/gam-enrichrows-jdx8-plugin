@@ -405,6 +405,32 @@ public class AssetResolutionStepTest {
     // =========================================================================
 
     @Test
+    public void testExceptionPriorityHighForLargeAmount() {
+        // Trigger INACTIVE_ASSET with amount >= 100K → verify priority=high
+        FormRowSet assets = TestDataFactory.rowSet(
+                TestDataFactory.assetMasterRow("ASSET-003", "AAPL", "US0378331005",
+                        "Apple Inc.", "equity", "common_stock", "USD", "suspended")
+        );
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_ASSET_MASTER),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(assets);
+
+        DataContext ctx = TestDataFactory.secuContext();
+        ctx.setAmount("250000.00");
+
+        StepResult result = step.execute(ctx, mockDao);
+
+        assertTrue(result.isSuccess());
+
+        ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
+        verify(mockDao).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_EXCEPTION_QUEUE), captor.capture());
+        FormRow savedRow = captor.getValue().get(0);
+
+        assertEquals("high", savedRow.getProperty("priority"));
+        assertEquals("supervisor", savedRow.getProperty("assigned_to"));
+    }
+
+    @Test
     public void testIdempotency_skipsResolved() {
         DataContext ctx = TestDataFactory.secuContext();
         TestDataFactory.withAsset(ctx, "ASSET-001", "US0378331005");

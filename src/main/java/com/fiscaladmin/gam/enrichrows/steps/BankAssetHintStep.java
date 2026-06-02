@@ -31,7 +31,10 @@ public class BankAssetHintStep extends AbstractDataStep {
     private static final String CLASS_NAME = BankAssetHintStep.class.getName();
 
     private static final Set<String> ELIGIBLE_TYPES = new HashSet<>(Arrays.asList(
-            "DIV_INCOME", "INT_INCOME", "DIV_TAX", "INCOME_TAX"
+            DomainConstants.INTERNAL_TYPE_DIV_INCOME,
+            DomainConstants.INTERNAL_TYPE_INT_INCOME,
+            DomainConstants.INTERNAL_TYPE_DIV_TAX,
+            DomainConstants.INTERNAL_TYPE_INCOME_TAX
     ));
 
     @Override

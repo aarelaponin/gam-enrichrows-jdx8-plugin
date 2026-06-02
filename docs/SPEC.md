@@ -243,6 +243,7 @@ Creates `trx_pair` record linking secu + bank principal + bank fee (if applicabl
 | `bank` | Bank registry |
 | `broker` | Broker registry |
 | `trxType` | Transaction type definitions |
+| `transactionTypeMap` | Transaction type mapping (type code → category) |
 
 ### Processing Tables (write)
 | Table | Description |
@@ -256,22 +257,55 @@ Creates `trx_pair` record linking secu + bank principal + bank fee (if applicabl
 
 ## 8. Exception Types
 
-| Exception | Priority | Trigger |
-|-----------|----------|---------|
-| MISSING_CURRENCY | high | No currency on transaction |
-| INVALID_CURRENCY | high | Currency not in master |
-| COUNTERPARTY_NOT_FOUND | medium | BIC not in counterparty_master |
-| MISSING_CUSTOMER | high | All 6 identification methods failed |
-| INACTIVE_CUSTOMER | high | KYC not completed |
-| LOW_CONFIDENCE_IDENTIFICATION | low | Confidence < threshold (default 80) |
-| MISSING_TICKER | high | No ticker on secu transaction |
-| UNKNOWN_ASSET | high | Ticker not in asset_master |
-| INACTIVE_ASSET | medium | Asset not in trading status |
-| NO_F14_RULES | medium | No rules for counterparty |
-| NO_RULE_MATCH | medium | Rules exist but none matched |
-| FX_RATE_MISSING | high | No rate for currency + date |
-| OLD_FX_RATE | medium | Rate older than 5 days |
-| PORTFOLIO_ALLOCATION_REQUIRED | medium | Secu record enriched, needs customer allocation |
+### Business Exceptions
+
+| Exception | Trigger |
+|-----------|---------|
+| MISSING_CURRENCY | No currency on transaction |
+| INVALID_CURRENCY | Currency not in master |
+| COUNTERPARTY_NOT_FOUND | BIC not in counterparty_master |
+| MISSING_CUSTOMER | All 6 identification methods failed |
+| INACTIVE_CUSTOMER | KYC not completed |
+| LOW_CONFIDENCE_IDENTIFICATION | Confidence < threshold (default 80) |
+| MISSING_TICKER | No ticker on secu transaction |
+| UNKNOWN_ASSET | Ticker not in asset_master |
+| INACTIVE_ASSET | Asset not in trading status |
+| NO_F14_RULES | No rules for counterparty |
+| NO_RULE_MATCH | Rules exist but none matched |
+| FX_RATE_MISSING | No rate for currency + date |
+| OLD_FX_RATE | Rate older than 5 days |
+| PORTFOLIO_ALLOCATION_REQUIRED | Secu record enriched, needs customer allocation |
+
+### Priority Calculation
+
+Priority is calculated dynamically based on the absolute transaction amount. Steps that self-calculate: CurrencyValidationStep, CounterpartyDeterminationStep, AssetResolutionStep. Other steps pass priority as a parameter when creating exceptions.
+
+| Amount (absolute) | Priority |
+|--------------------|----------|
+| >= 1,000,000 | `critical` |
+| >= 100,000 | `high` |
+| >= 10,000 | `medium` |
+| < 10,000 | `low` |
+| Unparseable/null | `medium` |
+
+Assignment rules based on priority:
+- `critical` or `high` → assigned to `supervisor`, due in 1 day
+- `medium` → assigned to `operations`, due in 3 days
+- `low` → assigned to `operations`, due in 7 days
+
+### Step Error Exceptions
+
+Catch-all exceptions created when a step encounters an unexpected error:
+
+| Exception | Step |
+|-----------|------|
+| CURRENCY_VALIDATION_ERROR | CurrencyValidationStep |
+| COUNTERPARTY_DETERMINATION_ERROR | CounterpartyDeterminationStep |
+| CUSTOMER_IDENTIFICATION_ERROR | CustomerIdentificationStep |
+| ASSET_RESOLUTION_ERROR | AssetResolutionStep |
+| F14_MAPPING_ERROR | F14RuleMappingStep |
+| INVALID_FX_DATE | FXConversionStep |
+| FX_CONVERSION_ERROR | FXConversionStep |
 
 ---
 
@@ -314,9 +348,13 @@ src/main/java/com/fiscaladmin/gam/
     │   ├── AbstractDataPersister.java    # Base persister
     │   ├── AbstractDataStep.java         # Base step (helpers, lifecycle)
     │   ├── DataContext.java              # Transaction context carrier
+    │   ├── DataLoader.java              # Loader interface
+    │   ├── DataPersister.java           # Persister interface
     │   ├── DataPipeline.java             # Step orchestration
+    │   ├── DataStep.java                # Step interface
     │   ├── StepResult.java               # Single step result
     │   ├── PipelineResult.java           # Single pipeline result
+    │   ├── PersistenceResult.java       # Single persistence result
     │   ├── BatchPipelineResult.java      # Batch processing results
     │   └── BatchPersistenceResult.java   # Batch persistence results
     ├── lib/
@@ -393,32 +431,34 @@ performStep(context, dao)  →  your implementation → StepResult
 ```java
 @Override
 public boolean shouldExecute(DataContext context) {
-    return "BANK".equals(context.getSourceType());
+    return "bank".equals(context.getSourceType());
 }
 ```
 
-**Inherited helper methods:**
+**AbstractDataStep helper methods:**
 ```java
-// Database
 FormRow loadFormRow(dao, tableName, id)
 boolean saveFormRow(dao, tableName, row)
-FormRowSet loadRecords(dao, tableName, condition, params, sort, desc, limit)
-
-// Exception & audit
-void createException(context, dao, errorCode, priority, details)
 void createAuditLog(context, dao, action, details)
-
-// Utilities
 double parseAmount(amountStr)
-String getStringValue(obj)
+boolean isFieldResolved(context, fieldName)
+```
+
+**AbstractDataPersister helper methods:**
+```java
 void setPropertySafe(row, property, value)
+String getStringValue(obj)
+boolean saveFormRow(dao, tableName, row)
+FormRow loadFormRow(dao, tableName, id)
+boolean updateFormRow(dao, tableName, row)
+FormRow createFormRow(id)
 ```
 
 **DataContext** carries data between steps:
 ```java
 // Read transaction data
 context.getTransactionId();
-context.getSourceType();       // "BANK" or "SECU"
+context.getSourceType();       // "bank" or "secu"
 context.getCurrency();
 context.getTransactionRow();   // original FormRow
 
@@ -519,8 +559,8 @@ GROUP BY s.id, s.c_status;
 
 **Key constants:**
 ```java
-DomainConstants.SOURCE_TYPE_BANK = "BANK"
-DomainConstants.SOURCE_TYPE_SECU = "SECU"
+DomainConstants.SOURCE_TYPE_BANK = "bank"
+DomainConstants.SOURCE_TYPE_SECU = "secu"
 FrameworkConstants.STATUS_NEW = "new"
 FrameworkConstants.STATUS_PROCESSING = "processing"
 FrameworkConstants.STATUS_ENRICHED = "enriched"
@@ -542,6 +582,9 @@ Common internal types mapped by F14 rules:
 | `EQ_SELL` | Equity sale |
 | `SEC_BUY` | Securities purchase |
 | `SEC_SELL` | Securities sale |
+| `DIV_INCOME` | Dividend income |
+| `DIV_TAX` | Dividend tax withholding |
+| `INCOME_TAX` | Income tax withholding |
 | `COMM_FEE` | Commission/fee |
 | `FX_EXCHANGE` | Foreign exchange conversion |
 | `TAX` | Tax payment (VAT, withholding tax) |

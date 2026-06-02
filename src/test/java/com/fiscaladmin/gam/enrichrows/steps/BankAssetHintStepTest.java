@@ -12,6 +12,8 @@ import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
+import java.util.Arrays;
+
 import static org.junit.Assert.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -83,6 +85,15 @@ public class BankAssetHintStepTest {
         DataContext ctx = TestDataFactory.bankContext();
         TestDataFactory.withF14(ctx, "INCOME_TAX", "RULE-TAX");
         assertTrue(step.shouldExecute(ctx));
+    }
+
+    @Test
+    public void testAllEligibleInternalTypesAccepted() {
+        for (String type : Arrays.asList("DIV_INCOME", "INT_INCOME", "DIV_TAX", "INCOME_TAX")) {
+            DataContext ctx = TestDataFactory.bankContext();
+            TestDataFactory.withF14(ctx, type, "RULE-TEST");
+            assertTrue("Should accept type: " + type, step.shouldExecute(ctx));
+        }
     }
 
     @Test

@@ -70,3 +70,4 @@ config.local.properties
 # Include documentation
 !docs/
 !docs/joget-dx8-plugin-dev-guide.md
+.claude/

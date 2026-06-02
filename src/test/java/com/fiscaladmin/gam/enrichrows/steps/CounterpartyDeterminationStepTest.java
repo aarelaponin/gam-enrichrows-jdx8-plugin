@@ -6,13 +6,16 @@ import com.fiscaladmin.gam.enrichrows.framework.DataContext;
 import com.fiscaladmin.gam.enrichrows.framework.StepResult;
 import com.fiscaladmin.gam.enrichrows.helpers.TestDataFactory;
 import org.joget.apps.form.dao.FormDataDao;
+import org.joget.apps.form.model.FormRow;
 import org.joget.apps.form.model.FormRowSet;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 import static org.junit.Assert.*;
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 public class CounterpartyDeterminationStepTest {
@@ -244,6 +247,29 @@ public class CounterpartyDeterminationStepTest {
     // =========================================================================
     // §9b Idempotency guard tests
     // =========================================================================
+
+    @Test
+    public void testExceptionPriorityHighForLargeAmount() {
+        // Trigger COUNTERPARTY_NOT_FOUND with amount >= 100K → verify priority=high
+        FormRowSet emptySet = TestDataFactory.emptyRowSet();
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_COUNTERPARTY_MASTER),
+                any(), any(), any(), any(), any(), any()))
+                .thenReturn(emptySet);
+        when(mockDao.find(isNull(), eq("bank"),
+                any(), any(), any(), any(), any(), any()))
+                .thenReturn(emptySet);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        ctx.setAmount("250000.00");
+        step.execute(ctx, mockDao);
+
+        ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
+        verify(mockDao).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_EXCEPTION_QUEUE), captor.capture());
+        FormRow savedRow = captor.getValue().get(0);
+
+        assertEquals("high", savedRow.getProperty("priority"));
+        assertEquals("supervisor", savedRow.getProperty("assigned_to"));
+    }
 
     @Test
     public void testIdempotency_skipsResolved() {

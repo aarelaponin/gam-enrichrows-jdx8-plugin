@@ -186,6 +186,161 @@ public class CurrencyValidationStepTest {
     }
 
     @Test
+    public void testPriorityMediumAmount() {
+        FormRowSet currencies = TestDataFactory.rowSet(
+                TestDataFactory.currencyRow("EUR", "Euro", "active")
+        );
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_CURRENCY_MASTER),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(currencies);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        ctx.setCurrency("XYZ");
+        ctx.setAmount("50000.00");
+
+        step.execute(ctx, mockDao);
+
+        ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
+        verify(mockDao).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_EXCEPTION_QUEUE), captor.capture());
+        FormRow savedRow = captor.getValue().get(0);
+
+        assertEquals("medium", savedRow.getProperty("priority"));
+    }
+
+    @Test
+    public void testPriorityBoundaryAt10K() {
+        FormRowSet currencies = TestDataFactory.rowSet(
+                TestDataFactory.currencyRow("EUR", "Euro", "active")
+        );
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_CURRENCY_MASTER),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(currencies);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        ctx.setCurrency("XYZ");
+        ctx.setAmount("10000.00");
+
+        step.execute(ctx, mockDao);
+
+        ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
+        verify(mockDao).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_EXCEPTION_QUEUE), captor.capture());
+        FormRow savedRow = captor.getValue().get(0);
+
+        assertEquals("medium", savedRow.getProperty("priority"));
+    }
+
+    @Test
+    public void testPriorityBoundaryBelow10K() {
+        FormRowSet currencies = TestDataFactory.rowSet(
+                TestDataFactory.currencyRow("EUR", "Euro", "active")
+        );
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_CURRENCY_MASTER),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(currencies);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        ctx.setCurrency("XYZ");
+        ctx.setAmount("9999.99");
+
+        step.execute(ctx, mockDao);
+
+        ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
+        verify(mockDao).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_EXCEPTION_QUEUE), captor.capture());
+        FormRow savedRow = captor.getValue().get(0);
+
+        assertEquals("low", savedRow.getProperty("priority"));
+    }
+
+    @Test
+    public void testPriorityBoundaryAt100K() {
+        FormRowSet currencies = TestDataFactory.rowSet(
+                TestDataFactory.currencyRow("EUR", "Euro", "active")
+        );
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_CURRENCY_MASTER),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(currencies);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        ctx.setCurrency("XYZ");
+        ctx.setAmount("100000.00");
+
+        step.execute(ctx, mockDao);
+
+        ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
+        verify(mockDao).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_EXCEPTION_QUEUE), captor.capture());
+        FormRow savedRow = captor.getValue().get(0);
+
+        assertEquals("high", savedRow.getProperty("priority"));
+    }
+
+    @Test
+    public void testPriorityBoundaryAt1M() {
+        FormRowSet currencies = TestDataFactory.rowSet(
+                TestDataFactory.currencyRow("EUR", "Euro", "active")
+        );
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_CURRENCY_MASTER),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(currencies);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        ctx.setCurrency("XYZ");
+        ctx.setAmount("1000000.00");
+
+        step.execute(ctx, mockDao);
+
+        ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
+        verify(mockDao).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_EXCEPTION_QUEUE), captor.capture());
+        FormRow savedRow = captor.getValue().get(0);
+
+        assertEquals("critical", savedRow.getProperty("priority"));
+    }
+
+    @Test
+    public void testPriorityNegativeAmount() {
+        FormRowSet currencies = TestDataFactory.rowSet(
+                TestDataFactory.currencyRow("EUR", "Euro", "active")
+        );
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_CURRENCY_MASTER),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(currencies);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        ctx.setCurrency("XYZ");
+        ctx.setAmount("-500000.00");
+
+        step.execute(ctx, mockDao);
+
+        ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
+        verify(mockDao).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_EXCEPTION_QUEUE), captor.capture());
+        FormRow savedRow = captor.getValue().get(0);
+
+        assertEquals("high", savedRow.getProperty("priority"));
+    }
+
+    @Test
+    public void testPriorityUnparseableAmount() {
+        // Unparseable amount string → default priority "medium"
+        FormRowSet currencies = TestDataFactory.rowSet(
+                TestDataFactory.currencyRow("EUR", "Euro", "active")
+        );
+        when(mockDao.find(isNull(), eq(DomainConstants.TABLE_CURRENCY_MASTER),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(currencies);
+
+        DataContext ctx = TestDataFactory.bankContext();
+        ctx.setCurrency("XYZ");
+        ctx.setAmount("abc");
+
+        step.execute(ctx, mockDao);
+
+        ArgumentCaptor<FormRowSet> captor = ArgumentCaptor.forClass(FormRowSet.class);
+        verify(mockDao).saveOrUpdate(isNull(), eq(DomainConstants.TABLE_EXCEPTION_QUEUE), captor.capture());
+        FormRow savedRow = captor.getValue().get(0);
+
+        assertEquals("medium", savedRow.getProperty("priority"));
+    }
+
+    @Test
     public void testExceptionQueueFieldsForCriticalAmount() {
         // amount = 2000000.00 (>= 1M) → priority=critical, assigned_to=supervisor
         FormRowSet currencies = TestDataFactory.rowSet(

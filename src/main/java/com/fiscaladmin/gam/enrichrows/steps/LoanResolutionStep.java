@@ -324,10 +324,15 @@ public class LoanResolutionStep extends AbstractDataStep {
             return activeLoans.get(0);
         }
 
-        // Fallback: non-cancelled/non-written-off, ordered by priority
+        // Fallback: non-cancelled/non-written-off, ordered by priority.
+        // Use a portable CASE expression instead of MySQL's FIELD() — FIELD() does
+        // not exist in PostgreSQL and threw "function field(...) does not exist",
+        // failing every loan-related transaction on the DX9 (Postgres) instance.
         String fallbackCondition = "WHERE c_customerId = ? " +
                 "AND c_status NOT IN ('ls-cancelled', 'ls-written-off') " +
-                "ORDER BY FIELD(c_status, 'ls-repaid', 'ls-overdue', 'ls-default', 'ls-approved', 'ls-draft')";
+                "ORDER BY CASE c_status " +
+                "WHEN 'ls-repaid' THEN 1 WHEN 'ls-overdue' THEN 2 WHEN 'ls-default' THEN 3 " +
+                "WHEN 'ls-approved' THEN 4 WHEN 'ls-draft' THEN 5 ELSE 6 END";
         FormRowSet fallbackLoans = formDataDao.find(null,
                 DomainConstants.TABLE_LOAN_CONTRACT,
                 fallbackCondition,

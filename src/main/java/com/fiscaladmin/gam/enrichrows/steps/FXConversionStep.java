@@ -76,7 +76,13 @@ public class FXConversionStep extends AbstractDataStep {
     private String getBaseCurrency() {
         if (baseCurrency == null) {
             Object value = getProperty("baseCurrency", DomainConstants.BASE_CURRENCY);
-            baseCurrency = value != null ? value.toString() : DomainConstants.BASE_CURRENCY;
+            // Guard against a blank/empty config value: an empty "baseCurrency"
+            // would make the EUR base-currency skip fail, so every EUR transaction
+            // would attempt a non-existent EUR->EUR lookup, get FX_RATE_MISSING, and
+            // be pushed to manual_review (excluding it from pairing). Treat blank as
+            // the default and normalise case/whitespace.
+            String s = value != null ? value.toString().trim() : "";
+            baseCurrency = s.isEmpty() ? DomainConstants.BASE_CURRENCY : s.toUpperCase();
         }
         return baseCurrency;
     }
