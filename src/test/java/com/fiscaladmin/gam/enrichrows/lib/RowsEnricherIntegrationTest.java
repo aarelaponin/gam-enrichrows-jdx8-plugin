@@ -454,7 +454,45 @@ public class RowsEnricherIntegrationTest {
                 false, result.getMetadata().get("needs_manual_review"));
     }
 
-    // ===== Test 9: Pipeline + Persist End-to-End =====
+    // ===== Test 9: stopOnError=true → Pipeline Halts on First Failure =====
+
+    @Test
+    public void testStopOnError_pipelineHaltsAndPropagatesError() {
+        DataContext ctx = TestDataFactory.bankContext();
+        ctx.setCurrency("INVALID"); // Will fail currency validation
+
+        // Build pipeline with stopOnError=true (default)
+        DataPipeline pipeline = new DataPipeline(mockDao)
+                .addStep(new CurrencyValidationStep())
+                .addStep(new CounterpartyDeterminationStep())
+                .addStep(new CustomerIdentificationStep())
+                .addStep(new F14RuleMappingStep())
+                .setStopOnError(true)
+                .setProperties(properties);
+
+        PipelineResult pipelineResult = pipeline.execute(ctx);
+
+        // Pipeline should fail
+        assertFalse("Pipeline should fail when stopOnError=true", pipelineResult.isSuccess());
+        assertNotNull("Error message should be set", pipelineResult.getErrorMessage());
+        assertTrue("Error should reference the failing step",
+                pipelineResult.getErrorMessage().contains("Currency Validation"));
+
+        // Subsequent steps should NOT have executed
+        Map<String, StepResult> stepResults = pipelineResult.getStepResults();
+        assertFalse("Currency Validation should have failed",
+                stepResults.get("Currency Validation").isSuccess());
+        assertNull("Counterparty step should not have executed",
+                stepResults.get("Counterparty Determination"));
+
+        // Persistence of a failed pipeline result should still create a record
+        EnrichmentDataPersister persister = createPersister();
+        PersistenceResult result = persister.persist(ctx, mockDao, properties);
+
+        assertTrue("Persistence should still succeed (records error state)", result.isSuccess());
+    }
+
+    // ===== Test 10: Pipeline + Persist End-to-End =====
 
     @Test
     public void testStatusManagerTransitionOrder() {

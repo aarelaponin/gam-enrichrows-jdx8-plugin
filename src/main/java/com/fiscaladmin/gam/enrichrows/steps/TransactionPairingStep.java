@@ -457,7 +457,8 @@ public class TransactionPairingStep {
      */
     private boolean shouldSkipBankRecord(FormRow bankRecord) {
         String type = bankRecord.getProperty("internal_type");
-        return "DIV_INCOME".equals(type) || "INCOME_TAX".equals(type);
+        return DomainConstants.INTERNAL_TYPE_DIV_INCOME.equals(type)
+                || DomainConstants.INTERNAL_TYPE_INCOME_TAX.equals(type);
     }
 
     private boolean isBankPrincipal(FormRow bankRecord) {

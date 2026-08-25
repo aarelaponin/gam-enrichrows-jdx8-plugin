@@ -123,6 +123,14 @@ public final class DomainConstants {
     public static final String EXCEPTION_PORTFOLIO_ALLOCATION_REQUIRED = "PORTFOLIO_ALLOCATION_REQUIRED";
 
     // =====================================================
+    // Internal Type Codes (BankAssetHintStep eligible types)
+    // =====================================================
+    public static final String INTERNAL_TYPE_DIV_INCOME = "DIV_INCOME";
+    public static final String INTERNAL_TYPE_INT_INCOME = "INT_INCOME";
+    public static final String INTERNAL_TYPE_DIV_TAX = "DIV_TAX";
+    public static final String INTERNAL_TYPE_INCOME_TAX = "INCOME_TAX";
+
+    // =====================================================
     // Audit Actions (Domain specific)
     // =====================================================
     public static final String AUDIT_CURRENCY_VALIDATED = "CURRENCY_VALIDATED";
